@@ -1,5 +1,6 @@
-"""Telegram channel adapter placeholder.
+"""Telegram channel adapter."""
 
-Phase 3 integration should map bot commands to the same TaskService methods used by CLI/Web.
-"""
+from app.channels.telegram.bot import run_telegram_bot
+
+__all__ = ["run_telegram_bot"]
 

@@ -7,7 +7,14 @@ import threading
 
 import uvicorn
 
-from app.bootstrap import get_gemini_chat_service, get_orchestrator, get_settings
+from app.bootstrap import (
+    get_gemini_chat_service,
+    get_kagi_search_service,
+    get_orchestrator,
+    get_settings,
+)
+from app.channels.telegram.bot import run_telegram_bot
+from app.services.kagi_search import KagiSearchError, SearchHit
 
 
 def _print_json(payload: object) -> None:
@@ -21,6 +28,22 @@ def _safe_print(text: str) -> None:
         encoding = sys.stdout.encoding or "utf-8"
         safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
         print(safe_text)
+
+
+def _format_search_results(hits: list[SearchHit]) -> str:
+    if not hits:
+        return "Результаты не найдены."
+    lines = ["Результаты поиска:"]
+    for hit in hits:
+        rank = hit.rank if hit.rank is not None else "-"
+        snippet = hit.snippet.replace("\n", " ").strip()
+        if len(snippet) > 180:
+            snippet = f"{snippet[:177]}..."
+        lines.append(f"{rank}. {hit.title}")
+        lines.append(f"   {hit.url}")
+        if snippet:
+            lines.append(f"   {snippet}")
+    return "\n".join(lines)
 
 
 class ChatTaskRuntime:
@@ -306,6 +329,34 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_telegram(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    token = str(args.token or "").strip()
+    if not token:
+        print("Telegram не настроен. Укажи TELEGRAM_BOT_TOKEN в .env.", file=sys.stderr)
+        return 1
+    allowed_chat_ids = (
+        set(args.allowed_chat_id)
+        if args.allowed_chat_id
+        else settings.telegram_allowed_chat_ids
+    )
+    orchestrator = get_orchestrator()
+    try:
+        run_telegram_bot(
+            orchestrator=orchestrator,
+            token=token,
+            queue_poll_interval_sec=args.queue_poll_interval_sec,
+            ci_poll_interval_sec=args.ci_poll_interval_sec,
+            poll_timeout_sec=args.poll_timeout_sec,
+            allowed_chat_ids=allowed_chat_ids,
+            gemini_chat_service=get_gemini_chat_service(),
+            kagi_search_service=get_kagi_search_service(),
+        )
+        return 0
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_tui(_: argparse.Namespace) -> int:
     from app.channels.cli.tui import run_tui
 
@@ -320,10 +371,39 @@ def cmd_tui(_: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_search(args: argparse.Namespace) -> int:
+    search = get_kagi_search_service()
+    if not search.configured:
+        print("Kagi не настроен. Укажи KAGI_API_KEY в .env.", file=sys.stderr)
+        return 1
+    try:
+        hits = search.search(query=args.query, limit=args.limit)
+    except KagiSearchError as exc:
+        print(f"Kagi search error: {exc}", file=sys.stderr)
+        return 1
+    payload = {
+        "query": args.query,
+        "results": [
+            {
+                "rank": hit.rank,
+                "title": hit.title,
+                "url": hit.url,
+                "snippet": hit.snippet,
+            }
+            for hit in hits
+        ],
+    }
+    if search.last_notice:
+        payload["notice"] = search.last_notice
+    _print_json(payload)
+    return 0
+
+
 def _print_chat_help() -> None:
     print("Чат работает на естественном языке.")
     print("Служебные команды:")
     print("  /help  - показать это сообщение")
+    print("  /search <запрос> - поиск в вебе через Kagi")
     print("  /exit  - выйти из чата")
 
 
@@ -346,6 +426,7 @@ def _pick_task_id(
 def cmd_chat(_: argparse.Namespace) -> int:
     orchestrator = get_orchestrator()
     gemini = get_gemini_chat_service()
+    search = get_kagi_search_service()
     if not gemini.configured:
         print("Gemini не настроен. Укажи GEMINI_API_KEY и GEMINI_MODEL в .env.", file=sys.stderr)
         return 1
@@ -370,6 +451,23 @@ def cmd_chat(_: argparse.Namespace) -> int:
                 return 0
             if user_input == "/help":
                 _print_chat_help()
+                continue
+            if user_input.startswith("/search"):
+                query = user_input.removeprefix("/search").strip()
+                if not query:
+                    _safe_print("ai> Использование: /search <запрос>")
+                    continue
+                if not search.configured:
+                    _safe_print("ai> Kagi не настроен. Укажи KAGI_API_KEY в .env.")
+                    continue
+                try:
+                    hits = search.search(query=query, limit=5)
+                except KagiSearchError as exc:
+                    _safe_print(f"ai> Ошибка Kagi поиска: {exc}")
+                    continue
+                if search.last_notice:
+                    _safe_print(f"note> {search.last_notice}")
+                _safe_print(f"ai> {_format_search_results(hits)}")
                 continue
 
             active_summary = _subagent_summary(
@@ -503,6 +601,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
     chat = sub.add_parser("chat", help="Interactive chat via Gemini")
     chat.set_defaults(func=cmd_chat)
+
+    search = sub.add_parser("search", help="Web search via Kagi API")
+    search.add_argument("--query", required=True)
+    search.add_argument("--limit", type=int, default=5)
+    search.set_defaults(func=cmd_search)
+
+    telegram = sub.add_parser("telegram", help="Run Telegram bot adapter")
+    telegram.add_argument("--token", default=settings.telegram_bot_token)
+    telegram.add_argument(
+        "--poll-timeout-sec",
+        type=int,
+        default=settings.telegram_poll_timeout_sec,
+    )
+    telegram.add_argument(
+        "--queue-poll-interval-sec",
+        type=int,
+        default=settings.telegram_queue_poll_interval_sec,
+    )
+    telegram.add_argument(
+        "--ci-poll-interval-sec",
+        type=int,
+        default=settings.telegram_ci_poll_interval_sec,
+    )
+    telegram.add_argument(
+        "--allowed-chat-id",
+        action="append",
+        type=int,
+        default=None,
+        help="Repeat option to allow multiple chat ids",
+    )
+    telegram.set_defaults(func=cmd_telegram)
 
     tui = sub.add_parser("tui", help="Full-screen TUI with always-visible chat and task board")
     tui.set_defaults(func=cmd_tui)
