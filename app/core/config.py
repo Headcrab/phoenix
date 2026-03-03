@@ -47,9 +47,14 @@ class Settings:
     queue_poll_interval_sec: int
     service_name: str
     healthcheck_url: str
+    api_host: str
+    api_port: int
     github_owner: str
     github_repo: str
     github_token: str
+    gemini_api_key: str
+    gemini_model: str
+    gemini_timeout_sec: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -70,10 +75,15 @@ class Settings:
             ci_poll_interval_sec=_read_int("PHOENIX_CI_POLL_INTERVAL_SEC", 30),
             queue_poll_interval_sec=_read_int("PHOENIX_QUEUE_POLL_INTERVAL_SEC", 20),
             service_name=os.getenv("PHOENIX_SERVICE_NAME", "PhoenixAgent"),
-            healthcheck_url=os.getenv("PHOENIX_HEALTHCHECK_URL", "http://127.0.0.1:8000/health"),
+            healthcheck_url=os.getenv("PHOENIX_HEALTHCHECK_URL", "http://127.0.0.1:8666/health"),
+            api_host=os.getenv("PHOENIX_API_HOST", "127.0.0.1"),
+            api_port=_read_int("PHOENIX_API_PORT", 8666),
             github_owner=os.getenv("GITHUB_OWNER", "").strip(),
             github_repo=os.getenv("GITHUB_REPO", "").strip(),
             github_token=os.getenv("GITHUB_TOKEN", "").strip(),
+            gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1").strip(),
+            gemini_timeout_sec=_read_int("GEMINI_TIMEOUT_SEC", 60),
         )
 
     @property

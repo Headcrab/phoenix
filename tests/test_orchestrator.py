@@ -75,10 +75,15 @@ def _settings(tmp_path: Path) -> Settings:
         ci_poll_interval_sec=5,
         queue_poll_interval_sec=5,
         service_name="svc",
-        healthcheck_url="http://127.0.0.1:8000/health",
+        healthcheck_url="http://127.0.0.1:8666/health",
+        api_host="127.0.0.1",
+        api_port=8666,
         github_owner="",
         github_repo="",
         github_token="",
+        gemini_api_key="",
+        gemini_model="gemini-3.1",
+        gemini_timeout_sec=30,
     )
 
 
@@ -115,4 +120,3 @@ def test_orchestrator_validation_failure(tmp_path: Path) -> None:
     task = orchestrator.get_task(result.task_id)
     assert task is not None
     assert task["status"] == "validation_failed"
-

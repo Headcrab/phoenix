@@ -6,6 +6,7 @@ from app.core.config import Settings
 from app.core.logging import configure_logging
 from app.db.repository import TaskRepository
 from app.services.codex_executor import CodexExecutor
+from app.services.gemini_chat import GeminiChatService
 from app.services.gitops import GitOps
 from app.services.lifecycle import LifecycleManager
 from app.services.orchestrator import Orchestrator
@@ -43,3 +44,12 @@ def get_orchestrator() -> Orchestrator:
         lifecycle=LifecycleManager(settings=settings),
     )
 
+
+@lru_cache(maxsize=1)
+def get_gemini_chat_service() -> GeminiChatService:
+    settings = get_settings()
+    return GeminiChatService(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
+        timeout_sec=settings.gemini_timeout_sec,
+    )

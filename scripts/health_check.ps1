@@ -3,7 +3,7 @@ Set-Location $PSScriptRoot\..
 
 $healthUrl = $env:PHOENIX_HEALTHCHECK_URL
 if ([string]::IsNullOrWhiteSpace($healthUrl)) {
-  $healthUrl = "http://127.0.0.1:8000/health"
+  $healthUrl = "http://127.0.0.1:8666/health"
 }
 
 try {
@@ -19,4 +19,3 @@ catch {
   Write-Error "Health-check failed: $($_.Exception.Message)"
   exit 1
 }
-
