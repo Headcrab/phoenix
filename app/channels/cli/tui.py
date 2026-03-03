@@ -208,12 +208,20 @@ class PhoenixTui:
         self._tasks: list[dict[str, Any]] = []
         self._selected = 0
         self._expanded: set[str] = set()
+        self._opened_task_id: str | None = None
+        self._details_scroll = 0
         self._chat_lines: list[str] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._focus_order = ["tasks", "details", "input"]
+        self._focus_idx = 2
 
         self._tasks_control = FormattedTextControl(self._render_tasks)
+        self._details_control = FormattedTextControl(self._render_details)
         self._chat_control = FormattedTextControl(self._render_chat)
+        self._tasks_window = Window(self._tasks_control, wrap_lines=False)
+        self._details_window = Window(self._details_control, wrap_lines=False)
+        self._chat_window = Window(self._chat_control, wrap_lines=True)
         self._input = TextArea(
             height=1,
             prompt="you> ",
@@ -250,8 +258,9 @@ class PhoenixTui:
             return 1
         self._append_chat(
             "sys",
-            "TUI запущен. Ввод всегда активен. Alt+Up/Alt+Down выбрать задачу, "
-            "Alt+Enter развернуть. Esc или Ctrl+C для выхода.",
+            "TUI запущен. Tab/Shift+Tab переключают окно. "
+            "В списке задач: Up/Down выбрать, Enter открыть задачу, Space развернуть. "
+            "В окне задачи: Up/Down прокрутка. Ctrl+C для выхода.",
         )
         self._runtime.start()
         self._refresh_thread.start()
@@ -267,16 +276,11 @@ class PhoenixTui:
             [
                 VSplit(
                     [
-                        Frame(
-                            Window(self._tasks_control, wrap_lines=False),
-                            title="Задачи",
-                        ),
-                        Frame(
-                            Window(self._chat_control, wrap_lines=True),
-                            title="Диалог",
-                        ),
+                        Frame(self._tasks_window, title="Задачи"),
+                        Frame(self._details_window, title="Задача"),
                     ]
                 ),
+                Frame(self._chat_window, title="Диалог"),
                 Frame(self._input, title="Сообщение"),
             ]
         )
@@ -286,26 +290,65 @@ class PhoenixTui:
         kb = KeyBindings()
 
         @kb.add("c-c")
-        @kb.add("escape")
         def _exit(event) -> None:
             event.app.exit()
 
-        @kb.add("escape", "up")
+        @kb.add("tab")
+        def _focus_next(event) -> None:
+            with self._lock:
+                self._focus_idx = (self._focus_idx + 1) % len(self._focus_order)
+            self._apply_focus(event)
+
+        @kb.add("s-tab")
+        def _focus_prev(event) -> None:
+            with self._lock:
+                self._focus_idx = (self._focus_idx - 1) % len(self._focus_order)
+            self._apply_focus(event)
+
+        @kb.add("up")
         def _prev_task(event) -> None:
+            if not self._focus_is("tasks"):
+                if self._focus_is("details"):
+                    with self._lock:
+                        self._details_scroll = max(0, self._details_scroll - 1)
+                    event.app.invalidate()
+                return
             with self._lock:
                 if self._selected > 0:
                     self._selected -= 1
             event.app.invalidate()
 
-        @kb.add("escape", "down")
+        @kb.add("down")
         def _next_task(event) -> None:
+            if not self._focus_is("tasks"):
+                if self._focus_is("details"):
+                    with self._lock:
+                        self._details_scroll += 1
+                    event.app.invalidate()
+                return
             with self._lock:
                 if self._selected < max(len(self._tasks) - 1, 0):
                     self._selected += 1
             event.app.invalidate()
 
-        @kb.add("escape", "enter")
+        @kb.add("enter")
+        def _enter(event) -> None:
+            if self._focus_is("tasks"):
+                self._open_selected_task()
+                with self._lock:
+                    self._focus_idx = self._focus_order.index("details")
+                self._apply_focus(event)
+                return
+            if self._focus_is("details"):
+                with self._lock:
+                    self._focus_idx = self._focus_order.index("input")
+                self._apply_focus(event)
+                return
+
+        @kb.add(" ")
         def _toggle_expand(event) -> None:
+            if not self._focus_is("tasks"):
+                return
             with self._lock:
                 if not self._tasks:
                     return
@@ -318,6 +361,28 @@ class PhoenixTui:
 
         return kb
 
+    def _focus_is(self, name: str) -> bool:
+        with self._lock:
+            return self._focus_order[self._focus_idx] == name
+
+    def _apply_focus(self, event) -> None:
+        with self._lock:
+            focus = self._focus_order[self._focus_idx]
+        if focus == "tasks":
+            event.app.layout.focus(self._tasks_window)
+        elif focus == "details":
+            event.app.layout.focus(self._details_window)
+        else:
+            event.app.layout.focus(self._input)
+        event.app.invalidate()
+
+    def _open_selected_task(self) -> None:
+        with self._lock:
+            if not self._tasks:
+                return
+            self._opened_task_id = str(self._tasks[self._selected].get("id", ""))
+            self._details_scroll = 0
+
     def _refresh_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -326,6 +391,8 @@ class PhoenixTui:
                     self._tasks = tasks
                     if self._selected >= len(self._tasks):
                         self._selected = max(len(self._tasks) - 1, 0)
+                    if not self._opened_task_id and self._tasks:
+                        self._opened_task_id = str(self._tasks[self._selected].get("id", ""))
                 self._app.invalidate()
             except Exception as exc:  # noqa: BLE001
                 self._append_chat("sys", f"Ошибка обновления задач: {exc}")
@@ -336,9 +403,10 @@ class PhoenixTui:
             tasks = list(self._tasks)
             selected = self._selected
             expanded = set(self._expanded)
+            focused = self._focus_order[self._focus_idx] == "tasks"
         if not tasks:
             return "Нет задач."
-        lines = ["Текущие и недавние задачи:"]
+        lines = [f"Текущие и недавние задачи{' [focus]' if focused else ''}:"]
         for idx, task in enumerate(tasks):
             task_id = str(task.get("id", ""))
             is_selected = idx == selected
@@ -358,6 +426,41 @@ class PhoenixTui:
                 events = (full or {}).get("events") or []
                 for event in events[:6]:
                     lines.append(f"    - {event.get('message')}")
+        return "\n".join(lines)
+
+    def _render_details(self) -> str:
+        with self._lock:
+            task_id = self._opened_task_id
+            scroll = self._details_scroll
+            focused = self._focus_order[self._focus_idx] == "details"
+            selected = self._selected
+            tasks = list(self._tasks)
+
+        if not task_id and tasks:
+            task_id = str(tasks[selected].get("id", ""))
+        if not task_id:
+            return "Выберите задачу в списке и нажмите Enter."
+
+        task = self._orchestrator.get_task(task_id)
+        if not task:
+            return f"Задача {task_id} не найдена."
+
+        lines = [f"Задача {task_id}{' [focus]' if focused else ''}"]
+        lines.append(f"status: {task.get('status')}")
+        lines.append(f"instruction: {task.get('instruction')}")
+        lines.append(f"branch: {task.get('branch_name') or '-'}")
+        lines.append(f"commit: {task.get('commit_sha') or '-'}")
+        lines.append(f"updated: {task.get('updated_at') or '-'}")
+        if task.get("last_error"):
+            lines.append(f"error: {task.get('last_error')}")
+        lines.append("events:")
+        events = task.get("events") or []
+        rendered = [f"- {e.get('message')}" for e in events]
+        if scroll > 0:
+            rendered = rendered[scroll:]
+        lines.extend(rendered[:80])
+        if len(events) > 80 + scroll:
+            lines.append("... (еще события ниже, прокрутка стрелками вверх/вниз)")
         return "\n".join(lines)
 
     def _render_chat(self) -> str:
