@@ -61,6 +61,17 @@ class TaskRepository:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(task_id) REFERENCES tasks(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS subagents (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    activity TEXT NOT NULL,
+                    details TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -158,3 +169,51 @@ class TaskRepository:
                 (task_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def upsert_subagent(
+        self,
+        subagent_id: str,
+        kind: str,
+        task_id: str,
+        status: str,
+        activity: str,
+        details: str = "",
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subagents (
+                    id, kind, task_id, status, activity, details, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    kind=excluded.kind,
+                    task_id=excluded.task_id,
+                    status=excluded.status,
+                    activity=excluded.activity,
+                    details=excluded.details,
+                    updated_at=excluded.updated_at
+                """,
+                (subagent_id, kind, task_id, status, activity, details, now, now),
+            )
+            row = conn.execute("SELECT * FROM subagents WHERE id = ?", (subagent_id,)).fetchone()
+        if not row:
+            raise KeyError(subagent_id)
+        return dict(row)
+
+    def get_subagent(self, subagent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM subagents WHERE id = ?", (subagent_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_subagents(self, limit: int = 100, active_only: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT * FROM subagents"
+        params: list[Any] = []
+        if active_only:
+            query += " WHERE status IN ('queued', 'running', 'waiting')"
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
