@@ -26,6 +26,8 @@ Set `.env` values:
 ```powershell
 phoenix submit --text "Add better retry logic"
 phoenix chat
+phoenix active
+phoenix subagents --all
 phoenix list
 phoenix status --task-id <id>
 phoenix logs --task-id <id>
@@ -53,6 +55,11 @@ Endpoints:
 - Phase 3: Telegram adapter mapped to same task service.
 
 Default API port is `8666`.
+
+`phoenix chat`:
+- `/improve ...` ставит задачу в очередь и не блокирует диалог.
+- Прогресс выводится кратко по этапам.
+- Для живого состояния используйте `/active` или `phoenix active`.
 
 ## 5. Windows service
 
