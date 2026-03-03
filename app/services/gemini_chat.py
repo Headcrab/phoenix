@@ -65,10 +65,8 @@ class GeminiChatService:
             if "generateContent" in (x.get("supportedGenerationMethods") or [])
         ]
         preferred = [
-            "models/gemini-2.5-pro",
-            "models/gemini-2.5-flash",
-            "models/gemini-2.0-flash",
-            "models/gemini-1.5-pro",
+            "models/gemini-3-flash-preview",
+            "models/gemini-3.1-flash-lite-preview",
         ]
         for name in preferred:
             if name in available:

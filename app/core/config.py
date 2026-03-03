@@ -82,7 +82,7 @@ class Settings:
             github_repo=os.getenv("GITHUB_REPO", "").strip(),
             github_token=os.getenv("GITHUB_TOKEN", "").strip(),
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1").strip(),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview").strip(),
             gemini_timeout_sec=_read_int("GEMINI_TIMEOUT_SEC", 60),
         )
 

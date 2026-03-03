@@ -13,6 +13,15 @@ def _print_json(payload: object) -> None:
     print(json.dumps(payload, ensure_ascii=True, indent=2))
 
 
+def _safe_print(text: str) -> None:
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        print(safe_text)
+
+
 def cmd_submit(args: argparse.Namespace) -> int:
     orchestrator = get_orchestrator()
     result = orchestrator.submit_task(
@@ -130,9 +139,9 @@ def cmd_chat(_: argparse.Namespace) -> int:
             print(f"Gemini error: {exc}", file=sys.stderr)
             continue
         if gemini.last_notice:
-            print(f"note> {gemini.last_notice}")
+            _safe_print(f"note> {gemini.last_notice}")
             gemini.last_notice = ""
-        print(f"ai> {answer}")
+        _safe_print(f"ai> {answer}")
         history.append({"role": "user", "text": user_input})
         history.append({"role": "assistant", "text": answer})
     return 0
