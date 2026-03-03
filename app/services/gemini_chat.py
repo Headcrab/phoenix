@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import json
+import re
+from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+
+@dataclass(slots=True)
+class IntentDecision:
+    action: str
+    instruction: str | None = None
+    task_id: str | None = None
+    reply: str | None = None
 
 
 class GeminiChatService:
@@ -39,6 +50,72 @@ class GeminiChatService:
             raise RuntimeError("Gemini returned empty response")
         return text
 
+    def route_intent(
+        self,
+        user_text: str,
+        active_subagents: list[dict[str, object]],
+        tracked_task_ids: list[str],
+    ) -> IntentDecision:
+        if not self.configured:
+            raise RuntimeError("Gemini is not configured. Set GEMINI_API_KEY and GEMINI_MODEL.")
+
+        action_schema = {
+            "allowed_actions": [
+                "chat",
+                "self_improve",
+                "show_active",
+                "show_subagents",
+                "show_status",
+                "show_logs",
+                "list_tasks",
+            ]
+        }
+        context = {
+            "active_subagents": active_subagents,
+            "tracked_task_ids": tracked_task_ids,
+            "user_text": user_text,
+        }
+        router_prompt = (
+            "Ты роутер намерений для CLI-агента.\n"
+            "Выбери ОДНО действие и верни ТОЛЬКО JSON-объект.\n"
+            f"Схема: {json.dumps(action_schema, ensure_ascii=False)}\n"
+            "Поля JSON: action, instruction, task_id, reply.\n"
+            "Правила:\n"
+            "1) Если пользователь просит изменить/добавить/исправить "
+            "агент или код -> self_improve.\n"
+            "2) Если спрашивает чем агент занят сейчас -> show_active.\n"
+            "3) Если просит показать субагентов -> show_subagents.\n"
+            "4) Если просит статус задачи -> show_status.\n"
+            "5) Если просит логи задачи -> show_logs.\n"
+            "6) Если просит список задач -> list_tasks.\n"
+            "7) Иначе -> chat с ответом в reply.\n"
+            f"Контекст: {json.dumps(context, ensure_ascii=False)}"
+        )
+
+        contents = [{"role": "user", "parts": [{"text": router_prompt}]}]
+        resp = self._generate(self._model, contents)
+        if resp.status_code == 404:
+            fallback = self._pick_fallback_model()
+            if fallback:
+                self.last_notice = (
+                    f"Model '{self._model}' недоступен, использую '{fallback}' для текущей сессии."
+                )
+                resp = self._generate(fallback, contents)
+        if resp.status_code >= 300:
+            raise RuntimeError(f"Gemini API error {resp.status_code}: {resp.text}")
+
+        text = self._extract_text(resp.json())
+        parsed = self._parse_json_object(text)
+        action = str(parsed.get("action", "chat")).strip()
+        if action not in action_schema["allowed_actions"]:
+            action = "chat"
+        return IntentDecision(
+            action=action,
+            instruction=self._as_optional_str(parsed.get("instruction")),
+            task_id=self._as_optional_str(parsed.get("task_id")),
+            reply=self._as_optional_str(parsed.get("reply")),
+        )
+
     def _generate(self, model: str, contents: list[dict[str, Any]]) -> requests.Response:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -48,7 +125,7 @@ class GeminiChatService:
             url,
             json={
                 "contents": contents,
-                "generationConfig": {"temperature": 0.7},
+                "generationConfig": {"temperature": 0.2},
             },
             timeout=self._timeout_sec,
         )
@@ -98,3 +175,31 @@ class GeminiChatService:
             if text:
                 texts.append(text)
         return "\n".join(texts).strip()
+
+    @staticmethod
+    def _as_optional_str(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _parse_json_object(text: str) -> dict[str, Any]:
+        stripped = text.strip()
+        try:
+            value = json.loads(stripped)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            pass
+
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if match:
+            candidate = match.group(0)
+            try:
+                value = json.loads(candidate)
+                if isinstance(value, dict):
+                    return value
+            except json.JSONDecodeError:
+                pass
+        return {"action": "chat", "reply": stripped}

@@ -307,15 +307,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def _print_chat_help() -> None:
-    print("Команды:")
-    print("  /help                  - показать справку")
-    print("  /exit                  - выйти из чата")
-    print("  /improve <текст>       - поставить self-improve задачу в очередь (фон)")
-    print("  /active                - что агент делает прямо сейчас")
-    print("  /subagents             - список активных субагентов")
-    print("  /status <task_id>      - статус задачи")
-    print("  /logs <task_id>        - полные логи задачи")
-    print("  /list                  - последние задачи")
+    print("Чат работает на естественном языке.")
+    print("Служебные команды:")
+    print("  /help  - показать это сообщение")
+    print("  /exit  - выйти из чата")
+
+
+def _pick_task_id(
+    explicit_task_id: str | None,
+    active_summary: list[dict[str, object]],
+    tracked_task_ids: list[str],
+) -> str | None:
+    if explicit_task_id:
+        return explicit_task_id
+    for item in active_summary:
+        task_id = item.get("task_id")
+        if task_id:
+            return str(task_id)
+    if tracked_task_ids:
+        return tracked_task_ids[-1]
+    return None
 
 
 def cmd_chat(_: argparse.Namespace) -> int:
@@ -327,7 +338,8 @@ def cmd_chat(_: argparse.Namespace) -> int:
     history: list[dict[str, str]] = []
     runtime = ChatTaskRuntime(orchestrator)
     runtime.start()
-    print("Phoenix Chat (Gemini). /help для справки, /exit для выхода.")
+    print("Phoenix Chat (Gemini). Пиши свободно, агент сам решит действие.")
+    print("Служебные: /help, /exit")
     try:
         while True:
             try:
@@ -345,11 +357,28 @@ def cmd_chat(_: argparse.Namespace) -> int:
             if user_input == "/help":
                 _print_chat_help()
                 continue
-            if user_input.startswith("/improve "):
-                instruction = user_input[len("/improve ") :].strip()
-                if not instruction:
-                    print("Укажи текст задачи после /improve")
-                    continue
+
+            active_summary = _subagent_summary(
+                orchestrator=orchestrator,
+                limit=50,
+                active_only=True,
+            )
+            tracked_task_ids = runtime.list_tracked()
+            try:
+                decision = gemini.route_intent(
+                    user_text=user_input,
+                    active_subagents=active_summary,
+                    tracked_task_ids=tracked_task_ids,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"Gemini error: {exc}", file=sys.stderr)
+                continue
+            if gemini.last_notice:
+                _safe_print(f"note> {gemini.last_notice}")
+                gemini.last_notice = ""
+
+            if decision.action == "self_improve":
+                instruction = (decision.instruction or user_input).strip()
                 result = orchestrator.submit_task(
                     instruction=instruction,
                     priority="normal",
@@ -357,56 +386,54 @@ def cmd_chat(_: argparse.Namespace) -> int:
                 )
                 runtime.track(result.task_id)
                 _safe_print(
-                    "self-improve поставлен в очередь: "
-                    f"task_id={result.task_id}, status={result.status}"
+                    "ai> Принял. Поставил задачу в очередь: "
+                    f"task_id={result.task_id}, статус={result.status}."
                 )
                 continue
-            if user_input == "/active":
-                summary = _subagent_summary(orchestrator=orchestrator, limit=50, active_only=True)
-                if summary:
-                    _print_json(summary)
+
+            if decision.action == "show_active":
+                if active_summary:
+                    _print_json(active_summary)
                 else:
-                    print("Сейчас активных задач нет.")
-                tracked = runtime.list_tracked()
-                if tracked:
-                    _safe_print(f"Отслеживаемые в чате задачи: {', '.join(tracked)}")
+                    _safe_print("ai> Сейчас агент свободен, активных задач нет.")
                 continue
-            if user_input == "/subagents":
+
+            if decision.action == "show_subagents":
                 _print_json(
                     _subagent_summary(
                         orchestrator=orchestrator,
                         limit=100,
-                        active_only=True,
+                        active_only=False,
                     )
                 )
                 continue
-            if user_input.startswith("/status "):
-                task_id = user_input[len("/status ") :].strip()
+
+            if decision.action in {"show_status", "show_logs"}:
+                task_id = _pick_task_id(decision.task_id, active_summary, tracked_task_ids)
+                if not task_id:
+                    _safe_print("ai> Не вижу активной задачи. Уточни `task_id`.")
+                    continue
                 task = orchestrator.get_task(task_id)
                 if not task:
-                    print("Task not found")
-                else:
+                    _safe_print(f"ai> Задача `{task_id}` не найдена.")
+                    continue
+                if decision.action == "show_status":
                     _print_json(task)
-                continue
-            if user_input.startswith("/logs "):
-                task_id = user_input[len("/logs ") :].strip()
-                task = orchestrator.get_task(task_id)
-                if not task:
-                    print("Task not found")
                 else:
                     _print_json(task.get("events", []))
                 continue
-            if user_input == "/list":
+
+            if decision.action == "list_tasks":
                 _print_json(orchestrator.list_tasks(limit=20))
                 continue
-            try:
-                answer = gemini.chat(history=history, user_text=user_input)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Gemini error: {exc}", file=sys.stderr)
-                continue
-            if gemini.last_notice:
-                _safe_print(f"note> {gemini.last_notice}")
-                gemini.last_notice = ""
+
+            answer = decision.reply
+            if not answer:
+                try:
+                    answer = gemini.chat(history=history, user_text=user_input)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Gemini error: {exc}", file=sys.stderr)
+                    continue
             _safe_print(f"ai> {answer}")
             history.append({"role": "user", "text": user_input})
             history.append({"role": "assistant", "text": answer})
