@@ -10,7 +10,9 @@ class FakeExecutor:
     def __init__(self, ok: bool):
         self._ok = ok
 
-    def run(self, instruction: str, task_id: str) -> ExecutionResult:
+    def run(self, instruction: str, task_id: str, on_output=None) -> ExecutionResult:
+        if on_output:
+            on_output("executor output")
         if self._ok:
             return ExecutionResult(ok=True, summary="ok", details="done")
         return ExecutionResult(ok=False, summary="fail", details="bad")
@@ -84,6 +86,10 @@ def _settings(tmp_path: Path) -> Settings:
         gemini_api_key="",
         gemini_model="gemini-3.1",
         gemini_timeout_sec=30,
+        telegram_bot_token="",
+        telegram_allowed_chat_ids=(),
+        telegram_poll_timeout_sec=25,
+        telegram_request_timeout_sec=30,
     )
 
 

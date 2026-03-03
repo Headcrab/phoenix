@@ -19,6 +19,8 @@ Copy-Item .env.example .env
 Set `.env` values:
 - `PHOENIX_EXECUTOR_CMD` - command to run external Codex worker (self-improve only).
 - `GEMINI_API_KEY`, `GEMINI_MODEL` - interactive chat model credentials.
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token for long-polling mode.
+- `TELEGRAM_ALLOWED_CHAT_IDS` - optional CSV list of allowed chat ids.
 - `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_TOKEN` - required for PR/auto-merge.
 
 ## 2. CLI usage
@@ -31,6 +33,7 @@ phoenix status --task-id <id>
 phoenix logs --task-id <id>
 phoenix worker-once
 phoenix rollback --task-id <id>
+phoenix telegram
 ```
 
 ## 3. Run API server
@@ -50,7 +53,7 @@ Endpoints:
 
 - Phase 1 (implemented): CLI + orchestrator pipeline.
 - Phase 2: richer Web UI over existing API.
-- Phase 3: Telegram adapter mapped to same task service.
+- Phase 3 (implemented): Telegram adapter mapped to same task service.
 
 Default API port is `8666`.
 

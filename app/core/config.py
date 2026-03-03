@@ -32,6 +32,19 @@ def _read_int(name: str, default: int) -> int:
     return int(value)
 
 
+def _read_int_tuple(name: str) -> tuple[int, ...]:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return ()
+    parsed: set[int] = set()
+    for item in value.split(","):
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        parsed.add(int(cleaned))
+    return tuple(sorted(parsed))
+
+
 @dataclass(slots=True)
 class Settings:
     repo_path: Path
@@ -55,6 +68,10 @@ class Settings:
     gemini_api_key: str
     gemini_model: str
     gemini_timeout_sec: int
+    telegram_bot_token: str
+    telegram_allowed_chat_ids: tuple[int, ...]
+    telegram_poll_timeout_sec: int
+    telegram_request_timeout_sec: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -84,8 +101,16 @@ class Settings:
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview").strip(),
             gemini_timeout_sec=_read_int("GEMINI_TIMEOUT_SEC", 60),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_allowed_chat_ids=_read_int_tuple("TELEGRAM_ALLOWED_CHAT_IDS"),
+            telegram_poll_timeout_sec=_read_int("TELEGRAM_POLL_TIMEOUT_SEC", 25),
+            telegram_request_timeout_sec=_read_int("TELEGRAM_REQUEST_TIMEOUT_SEC", 30),
         )
 
     @property
     def github_enabled(self) -> bool:
         return bool(self.github_owner and self.github_repo and self.github_token)
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token)

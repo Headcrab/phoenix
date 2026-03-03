@@ -79,7 +79,11 @@ class Orchestrator:
             branch = self._gitops.create_task_branch(task_id, task["instruction"])
             self._repo.update_task(task_id, branch_name=branch)
             self._repo.append_event(task_id, f"Using branch {branch}")
-            execution = self._executor.run(task["instruction"], task_id)
+            execution = self._executor.run(
+                task["instruction"],
+                task_id,
+                on_output=lambda line: self._repo.append_event(task_id, f"codex> {line[:500]}"),
+            )
             self._repo.append_event(task_id, f"Executor: {execution.summary}")
             if execution.details:
                 self._repo.append_event(task_id, execution.details[:1500])
