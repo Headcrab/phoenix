@@ -116,6 +116,47 @@ class GeminiChatService:
             reply=self._as_optional_str(parsed.get("reply")),
         )
 
+    def summarize_task_result(self, task: dict[str, Any]) -> str:
+        if not self.configured:
+            return (
+                f"Задача {task.get('id')} завершена со статусом {task.get('status')}."
+            )
+        payload = {
+            "task_id": task.get("id"),
+            "status": task.get("status"),
+            "last_error": task.get("last_error"),
+            "branch_name": task.get("branch_name"),
+            "commit_sha": task.get("commit_sha"),
+            "pr_url": task.get("pr_url"),
+            "events_tail": [
+                e.get("message")
+                for e in (task.get("events") or [])[:10]
+            ],
+        }
+        prompt = (
+            "Ты главный агент. Коротко (1-3 предложения, русский язык) сообщи пользователю "
+            "итог задачи. Без технического шума, только суть и что делать дальше при ошибке.\n"
+            f"Данные: {json.dumps(payload, ensure_ascii=False)}"
+        )
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        resp = self._generate(self._model, contents)
+        if resp.status_code == 404:
+            fallback = self._pick_fallback_model()
+            if fallback:
+                self.last_notice = (
+                    f"Model '{self._model}' недоступен, использую '{fallback}' для текущей сессии."
+                )
+                resp = self._generate(fallback, contents)
+        if resp.status_code >= 300:
+            return (
+                f"Задача {task.get('id')} завершена со статусом {task.get('status')}. "
+                f"Не удалось сформировать пояснение: Gemini API {resp.status_code}."
+            )
+        text = self._extract_text(resp.json())
+        if not text:
+            return f"Задача {task.get('id')} завершена со статусом {task.get('status')}."
+        return text
+
     def _generate(self, model: str, contents: list[dict[str, Any]]) -> requests.Response:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"

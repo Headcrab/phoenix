@@ -26,6 +26,7 @@ Set `.env` values:
 ```powershell
 phoenix submit --text "Add better retry logic"
 phoenix chat
+phoenix tui
 phoenix active
 phoenix subagents --all
 phoenix list
@@ -61,6 +62,12 @@ Default API port is `8666`.
 - Self-improve запускается в фоне и не блокирует диалог.
 - Прогресс выводится кратко по этапам.
 - Служебные команды только `/help` и `/exit`.
+
+`phoenix tui`:
+- Полноэкранный интерфейс: слева задачи, справа диалог, поле ввода всегда видно.
+- Alt+Up/Alt+Down: выбор задачи.
+- Alt+Enter: развернуть/свернуть выбранную задачу.
+- При завершении задачи итог формирует главный агент (Gemini) и показывает вам короткий вывод.
 
 ## 5. Windows service
 

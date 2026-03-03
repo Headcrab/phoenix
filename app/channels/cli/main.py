@@ -306,6 +306,20 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tui(_: argparse.Namespace) -> int:
+    from app.channels.cli.tui import run_tui
+
+    try:
+        return run_tui()
+    except Exception as exc:  # noqa: BLE001
+        print(
+            "TUI не удалось запустить. Нужна интерактивная локальная консоль (cmd/pwsh).",
+            file=sys.stderr,
+        )
+        print(f"Детали: {exc}", file=sys.stderr)
+        return 1
+
+
 def _print_chat_help() -> None:
     print("Чат работает на естественном языке.")
     print("Служебные команды:")
@@ -489,6 +503,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     chat = sub.add_parser("chat", help="Interactive chat via Gemini")
     chat.set_defaults(func=cmd_chat)
+
+    tui = sub.add_parser("tui", help="Full-screen TUI with always-visible chat and task board")
+    tui.set_defaults(func=cmd_tui)
 
     return parser
 
