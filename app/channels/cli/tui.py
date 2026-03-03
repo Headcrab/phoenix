@@ -6,6 +6,7 @@ import threading
 from typing import Any
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.filters import has_focus
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit
 from prompt_toolkit.layout.containers import Window
@@ -331,19 +332,18 @@ class PhoenixTui:
                     self._selected += 1
             event.app.invalidate()
 
-        @kb.add("enter")
+        @kb.add("enter", filter=has_focus(self._tasks_window))
         def _enter(event) -> None:
-            if self._focus_is("tasks"):
-                self._open_selected_task()
-                with self._lock:
-                    self._focus_idx = self._focus_order.index("details")
-                self._apply_focus(event)
-                return
-            if self._focus_is("details"):
-                with self._lock:
-                    self._focus_idx = self._focus_order.index("input")
-                self._apply_focus(event)
-                return
+            self._open_selected_task()
+            with self._lock:
+                self._focus_idx = self._focus_order.index("details")
+            self._apply_focus(event)
+
+        @kb.add("enter", filter=has_focus(self._details_window))
+        def _enter_details(event) -> None:
+            with self._lock:
+                self._focus_idx = self._focus_order.index("input")
+            self._apply_focus(event)
 
         @kb.add(" ")
         def _toggle_expand(event) -> None:
