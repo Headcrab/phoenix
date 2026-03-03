@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("#") or "=" not in cleaned:
+            continue
+        key, value = cleaned.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+def _read_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return int(value)
+
+
+@dataclass(slots=True)
+class Settings:
+    repo_path: Path
+    db_path: Path
+    main_branch: str
+    remote_name: str
+    executor_cmd: str
+    executor_timeout_sec: int
+    quality_gate_timeout_sec: int
+    auto_process_on_submit: bool
+    auto_merge: bool
+    ci_poll_interval_sec: int
+    queue_poll_interval_sec: int
+    service_name: str
+    healthcheck_url: str
+    github_owner: str
+    github_repo: str
+    github_token: str
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        _load_dotenv(Path(".env").resolve())
+        repo_path = Path(os.getenv("PHOENIX_REPO_PATH", ".")).resolve()
+        db_path = Path(os.getenv("PHOENIX_DB_PATH", ".phoenix/phoenix.db")).resolve()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return cls(
+            repo_path=repo_path,
+            db_path=db_path,
+            main_branch=os.getenv("PHOENIX_MAIN_BRANCH", "main"),
+            remote_name=os.getenv("PHOENIX_REMOTE_NAME", "origin"),
+            executor_cmd=os.getenv("PHOENIX_EXECUTOR_CMD", "").strip(),
+            executor_timeout_sec=_read_int("PHOENIX_EXECUTOR_TIMEOUT_SEC", 1800),
+            quality_gate_timeout_sec=_read_int("PHOENIX_QUALITY_GATE_TIMEOUT_SEC", 1200),
+            auto_process_on_submit=_read_bool("PHOENIX_AUTO_PROCESS_ON_SUBMIT", True),
+            auto_merge=_read_bool("PHOENIX_AUTO_MERGE", True),
+            ci_poll_interval_sec=_read_int("PHOENIX_CI_POLL_INTERVAL_SEC", 30),
+            queue_poll_interval_sec=_read_int("PHOENIX_QUEUE_POLL_INTERVAL_SEC", 20),
+            service_name=os.getenv("PHOENIX_SERVICE_NAME", "PhoenixAgent"),
+            healthcheck_url=os.getenv("PHOENIX_HEALTHCHECK_URL", "http://127.0.0.1:8000/health"),
+            github_owner=os.getenv("GITHUB_OWNER", "").strip(),
+            github_repo=os.getenv("GITHUB_REPO", "").strip(),
+            github_token=os.getenv("GITHUB_TOKEN", "").strip(),
+        )
+
+    @property
+    def github_enabled(self) -> bool:
+        return bool(self.github_owner and self.github_repo and self.github_token)
