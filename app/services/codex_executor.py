@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -62,29 +63,77 @@ class CodexExecutor:
                 details=str(exc),
             )
 
-    def _build_command(self, instruction: str, payload_path: Path) -> str:
+    def _build_command(self, instruction: str, payload_path: Path) -> list[str]:
         trimmed = self._executor_cmd.strip()
-        lower = trimmed.lower()
-        is_codex = (
-            lower == "codex"
-            or lower.endswith("\\codex.ps1")
-            or lower.endswith("\\codex.cmd")
-        )
+        script_parts = self._split_windows_path_with_args(trimmed)
+        if script_parts:
+            parts = script_parts
+        else:
+            try:
+                parts = shlex.split(trimmed, posix=False)
+            except ValueError:
+                parts = [trimmed]
+
+        if not parts:
+            return []
+
+        executable = parts[0]
+        extra_args = parts[1:]
+        executable_name = Path(executable).name.lower()
+        is_codex = executable_name in {"codex", "codex.ps1", "codex.cmd", "codex.exe"}
+        is_ps1_script = executable_name.endswith(".ps1")
+
         if is_codex:
-            prompt = instruction.replace('"', '\\"')
-            return (
-                "powershell -NoProfile -ExecutionPolicy Bypass "
-                f"-Command \"{trimmed} exec -s workspace-write \\\"{prompt}\\\"\""
-            )
-        payload_arg = str(payload_path).replace('"', '\\"')
-        return (
-            "powershell -NoProfile -ExecutionPolicy Bypass "
-            f"-Command \"{trimmed} \\\"{payload_arg}\\\"\""
-        )
+            codex_args = ["exec", "-s", "workspace-write", instruction]
+            if is_ps1_script:
+                return [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    executable,
+                    *extra_args,
+                    *codex_args,
+                ]
+            return [executable, *extra_args, *codex_args]
+
+        payload_arg = str(payload_path)
+        if is_ps1_script:
+            return [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                executable,
+                *extra_args,
+                payload_arg,
+            ]
+        return [executable, *extra_args, payload_arg]
+
+    def _split_windows_path_with_args(self, command: str) -> list[str] | None:
+        lower = command.lower()
+        for ext in (".ps1", ".cmd", ".exe", ".bat"):
+            idx = lower.find(ext)
+            while idx != -1:
+                end = idx + len(ext)
+                candidate = command[:end].strip().strip('"').strip("'")
+                if candidate and Path(candidate).exists():
+                    rest = command[end:].strip()
+                    if not rest:
+                        return [candidate]
+                    try:
+                        rest_parts = shlex.split(rest, posix=False)
+                    except ValueError:
+                        rest_parts = [rest]
+                    return [candidate, *rest_parts]
+                idx = lower.find(ext, end)
+        return None
 
     def _run_streaming_command(
         self,
-        command: str,
+        command: list[str],
         on_output: Callable[[str], None] | None = None,
     ) -> tuple[bool, int, str]:
         proc = subprocess.Popen(
@@ -93,7 +142,7 @@ class CodexExecutor:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            shell=True,
+            shell=False,
         )
         started_at = time.monotonic()
         lines: list[str] = []
