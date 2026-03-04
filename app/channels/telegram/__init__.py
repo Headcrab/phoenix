@@ -1,5 +1,3 @@
-"""Telegram channel adapter placeholder.
+"""Telegram channel adapter."""
 
-Phase 3 integration should map bot commands to the same TaskService methods used by CLI/Web.
-"""
 

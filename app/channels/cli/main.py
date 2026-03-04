@@ -320,6 +320,13 @@ def cmd_tui(_: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_telegram(_: argparse.Namespace) -> int:
+    from app.channels.telegram.bot import TelegramBot
+
+    bot = TelegramBot()
+    return bot.run()
+
+
 def _print_chat_help() -> None:
     print("Чат работает на естественном языке.")
     print("Служебные команды:")
@@ -506,6 +513,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     tui = sub.add_parser("tui", help="Full-screen TUI with always-visible chat and task board")
     tui.set_defaults(func=cmd_tui)
+
+    telegram = sub.add_parser("telegram", help="Run Telegram bot adapter")
+    telegram.set_defaults(func=cmd_telegram)
 
     return parser
 
