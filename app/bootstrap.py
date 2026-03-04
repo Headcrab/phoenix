@@ -8,6 +8,7 @@ from app.db.repository import TaskRepository
 from app.services.codex_executor import CodexExecutor
 from app.services.gemini_chat import GeminiChatService
 from app.services.gitops import GitOps
+from app.services.kagi_search import KagiSearchService
 from app.services.lifecycle import LifecycleManager
 from app.services.orchestrator import Orchestrator
 from app.services.validator import Validator
@@ -52,4 +53,14 @@ def get_gemini_chat_service() -> GeminiChatService:
         api_key=settings.gemini_api_key,
         model=settings.gemini_model,
         timeout_sec=settings.gemini_timeout_sec,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_kagi_search_service() -> KagiSearchService:
+    settings = get_settings()
+    return KagiSearchService(
+        api_key=settings.kagi_api_key,
+        base_url=settings.kagi_api_base_url,
+        timeout_sec=settings.kagi_timeout_sec,
     )

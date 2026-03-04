@@ -345,10 +345,8 @@ class PhoenixTui:
                 self._focus_idx = self._focus_order.index("input")
             self._apply_focus(event)
 
-        @kb.add(" ")
+        @kb.add(" ", filter=has_focus(self._tasks_window))
         def _toggle_expand(event) -> None:
-            if not self._focus_is("tasks"):
-                return
             with self._lock:
                 if not self._tasks:
                     return

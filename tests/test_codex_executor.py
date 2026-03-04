@@ -50,3 +50,18 @@ def test_build_command_unquoted_ps1_path_with_spaces_and_args(tmp_path: Path) ->
         "workspace-write",
         "do work",
     ]
+
+
+def test_streaming_command_invalid_utf8_does_not_crash(tmp_path: Path) -> None:
+    executor = CodexExecutor(repo_path=tmp_path, executor_cmd="python", timeout_sec=30)
+    command = [
+        "python",
+        "-c",
+        "import sys; sys.stdout.buffer.write(b'\\x98\\n'); sys.stdout.flush()",
+    ]
+
+    ok, returncode, output = executor._run_streaming_command(command)
+
+    assert ok is True
+    assert returncode == 0
+    assert output

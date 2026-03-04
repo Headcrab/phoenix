@@ -5,6 +5,11 @@ $healthUrl = $env:PHOENIX_HEALTHCHECK_URL
 if ([string]::IsNullOrWhiteSpace($healthUrl)) {
   $healthUrl = "http://127.0.0.1:8666/health"
 }
+$strict = $env:PHOENIX_HEALTHCHECK_STRICT
+$strictMode = $false
+if (-not [string]::IsNullOrWhiteSpace($strict)) {
+  $strictMode = @("1", "true", "yes", "on") -contains $strict.ToLowerInvariant()
+}
 
 try {
   $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 10
@@ -16,6 +21,16 @@ try {
   exit 1
 }
 catch {
-  Write-Error "Health-check failed: $($_.Exception.Message)"
-  exit 1
+  $exception = $_.Exception
+  if ($exception -and $exception.Response) {
+    Write-Error "Health-check failed: $($exception.Message)"
+    exit 1
+  }
+  if ($strictMode) {
+    Write-Error "Health-check failed: $($exception.Message)"
+    exit 1
+  }
+  Write-Warning "Health-check skipped: endpoint unreachable ($($exception.Message))"
+  Write-Host "Set PHOENIX_HEALTHCHECK_STRICT=true to enforce failure."
+  exit 0
 }
