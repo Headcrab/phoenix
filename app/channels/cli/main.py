@@ -75,15 +75,13 @@ class ChatTaskRuntime:
         while not self._stop_event.is_set():
             with self._lock:
                 tracked = list(self._tracked_tasks)
-
             for task_id in tracked:
                 task = self._orchestrator.get_task(task_id)
                 if not task:
                     continue
 
                 status = str(task.get("status", "unknown"))
-                previous_status = self._last_status.get(task_id)
-                if status != previous_status:
+                if status != self._last_status.get(task_id):
                     self._emit_progress(
                         task_id,
                         self._status_progress(status),
@@ -91,10 +89,9 @@ class ChatTaskRuntime:
                     )
                     self._last_status[task_id] = status
 
-                last_seen = self._last_event_id.get(task_id, 0)
                 events = task.get("events") or []
+                last_seen = self._last_event_id.get(task_id, 0)
                 new_events = [ev for ev in events if int(ev.get("id", 0)) > last_seen]
-
                 for ev in sorted(new_events, key=lambda x: int(x.get("id", 0))):
                     ev_id = int(ev.get("id", 0))
                     message = str(ev.get("message", ""))
@@ -111,7 +108,6 @@ class ChatTaskRuntime:
                 if status in self.FINAL_STATUSES:
                     with self._lock:
                         self._tracked_tasks.discard(task_id)
-
             self._stop_event.wait(1.0)
 
     def _emit_progress(self, task_id: str, progress: int, text: str) -> None:
@@ -204,29 +200,25 @@ class ChatTaskRuntime:
         return any(marker in lowered for marker in markers)
 
 
-def _subagent_summary(
+def _active_subagent_summary(
     orchestrator,
     limit: int = 50,
     active_only: bool = True,
 ) -> list[dict[str, object]]:
-    rows = orchestrator.list_subagents(limit=limit, active_only=active_only)
+    subagents = orchestrator.list_subagents(limit=limit, active_only=active_only)
     result: list[dict[str, object]] = []
-    active_task_statuses = {"queued", "running", "waiting_ci"}
-    for row in rows:
-        task_id = str(row.get("task_id", ""))
+    for subagent in subagents:
+        task_id = str(subagent.get("task_id", ""))
         task = orchestrator.get_task(task_id) if task_id else None
-        task_status = task.get("status") if task else None
-        if active_only and task_status not in active_task_statuses:
-            continue
         result.append(
             {
-                "subagent_id": row.get("id"),
-                "kind": row.get("kind"),
-                "status": row.get("status"),
-                "activity": row.get("activity"),
+                "subagent_id": subagent.get("id"),
+                "kind": subagent.get("kind"),
+                "status": subagent.get("status"),
+                "activity": subagent.get("activity"),
                 "task_id": task_id,
-                "task_status": task_status,
-                "updated_at": row.get("updated_at"),
+                "task_status": task.get("status") if task else None,
+                "updated_at": subagent.get("updated_at"),
             }
         )
     return result
@@ -288,7 +280,7 @@ def cmd_worker_once(_: argparse.Namespace) -> int:
 
 def cmd_active(args: argparse.Namespace) -> int:
     orchestrator = get_orchestrator()
-    summary = _subagent_summary(
+    summary = _active_subagent_summary(
         orchestrator=orchestrator,
         limit=args.limit,
         active_only=True,
@@ -299,7 +291,7 @@ def cmd_active(args: argparse.Namespace) -> int:
 
 def cmd_subagents(args: argparse.Namespace) -> int:
     orchestrator = get_orchestrator()
-    summary = _subagent_summary(
+    summary = _active_subagent_summary(
         orchestrator=orchestrator,
         limit=args.limit,
         active_only=not args.all,
@@ -344,12 +336,12 @@ def _print_chat_help() -> None:
     print("Команды:")
     print("  /help                  - показать справку")
     print("  /exit                  - выйти из чата")
-    print("  /improve <текст>       - поставить self-improve задачу в очередь (фон)")
+    print("  /improve <текст>       - отправить self-improve задачу (через Codex, в фоне)")
+    print("  /status <task_id>      - статус задачи")
     print("  /active                - что агент делает прямо сейчас")
     print("  /subagents             - список активных субагентов")
-    print("  /status <task_id>      - статус задачи")
-    print("  /logs <task_id>        - полные логи задачи")
     print("  /list                  - последние задачи")
+    print("  /logs <task_id>        - полные логи по задаче")
 
 
 def cmd_chat(_: argparse.Namespace) -> int:
@@ -360,10 +352,9 @@ def cmd_chat(_: argparse.Namespace) -> int:
         return 1
 
     history: list[dict[str, str]] = []
-    runtime = ChatTaskRuntime(orchestrator=orchestrator)
+    runtime = ChatTaskRuntime(orchestrator)
     runtime.start()
     print("Phoenix Chat (Gemini). /help для справки, /exit для выхода.")
-
     try:
         while True:
             try:
@@ -374,7 +365,6 @@ def cmd_chat(_: argparse.Namespace) -> int:
             except KeyboardInterrupt:
                 print()
                 return 0
-
             if not user_input:
                 continue
             if user_input in {"/exit", "/quit"}:
@@ -398,48 +388,52 @@ def cmd_chat(_: argparse.Namespace) -> int:
                     f"task_id={result.task_id}, status={result.status}"
                 )
                 continue
-            if user_input == "/active":
-                summary = _subagent_summary(orchestrator=orchestrator, limit=50, active_only=True)
-                if summary:
-                    _print_json(summary)
-                else:
-                    print("Сейчас активных задач нет.")
-                continue
-            if user_input == "/subagents":
-                _print_json(
-                    _subagent_summary(
-                        orchestrator=orchestrator,
-                        limit=100,
-                        active_only=True,
-                    )
-                )
-                continue
             if user_input.startswith("/status "):
                 task_id = user_input[len("/status ") :].strip()
                 task = orchestrator.get_task(task_id)
-                if task:
-                    _print_json(task)
-                else:
+                if not task:
                     print("Task not found")
+                else:
+                    _print_json(task)
                 continue
             if user_input.startswith("/logs "):
                 task_id = user_input[len("/logs ") :].strip()
                 task = orchestrator.get_task(task_id)
-                if task:
-                    _print_json(task.get("events", []))
-                else:
+                if not task:
                     print("Task not found")
+                else:
+                    _print_json(task.get("events", []))
+                continue
+            if user_input == "/active":
+                summary = _active_subagent_summary(
+                    orchestrator=orchestrator,
+                    limit=50,
+                    active_only=True,
+                )
+                if not summary:
+                    print("Сейчас активных задач нет.")
+                else:
+                    _print_json(summary)
+                tracked = runtime.list_tracked()
+                if tracked:
+                    _safe_print(f"Отслеживаемые в чате задачи: {', '.join(tracked)}")
+                continue
+            if user_input == "/subagents":
+                summary = _active_subagent_summary(
+                    orchestrator=orchestrator,
+                    limit=100,
+                    active_only=True,
+                )
+                _print_json(summary)
                 continue
             if user_input == "/list":
                 _print_json(orchestrator.list_tasks(limit=20))
                 continue
-
             try:
                 answer = gemini.chat(history=history, user_text=user_input)
             except Exception as exc:  # noqa: BLE001
                 print(f"Gemini error: {exc}", file=sys.stderr)
                 continue
-
             if gemini.last_notice:
                 _safe_print(f"note> {gemini.last_notice}")
                 gemini.last_notice = ""
@@ -481,7 +475,7 @@ def _build_parser() -> argparse.ArgumentParser:
     worker = sub.add_parser("worker-once", help="Run one worker iteration")
     worker.set_defaults(func=cmd_worker_once)
 
-    active = sub.add_parser("active", help="Show currently active subagents")
+    active = sub.add_parser("active", help="Show currently active tasks")
     active.add_argument("--limit", type=int, default=50)
     active.set_defaults(func=cmd_active)
 

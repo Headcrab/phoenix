@@ -103,7 +103,6 @@ class Orchestrator:
             branch = self._gitops.create_task_branch(task_id, task["instruction"])
             self._repo.update_task(task_id, branch_name=branch)
             self._repo.append_event(task_id, f"Using branch {branch}")
-
             self._set_subagent(task_id, "running", "Codex выполняет задачу")
             execution = self._executor.run(
                 task["instruction"],
@@ -289,4 +288,3 @@ class Orchestrator:
 
     def list_subagents(self, limit: int = 100, active_only: bool = False) -> list[dict[str, Any]]:
         return self._repo.list_subagents(limit=limit, active_only=active_only)
-

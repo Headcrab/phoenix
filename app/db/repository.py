@@ -216,4 +216,3 @@ class TaskRepository:
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
-
