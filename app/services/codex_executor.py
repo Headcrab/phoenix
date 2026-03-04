@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -41,10 +40,7 @@ class CodexExecutor:
                 encoding="utf-8",
             )
             command = self._build_command(instruction, payload_path)
-            ok, returncode, output = self._run_streaming_command(
-                command=command,
-                on_output=on_output,
-            )
+            ok, returncode, output = self._run_streaming_command(command, on_output)
             if ok:
                 return ExecutionResult(
                     ok=True,
@@ -144,6 +140,20 @@ class CodexExecutor:
             text=True,
             shell=False,
         )
+
+    def _run_streaming_command(
+        self,
+        command: str,
+        on_output: Callable[[str], None] | None = None,
+    ) -> tuple[bool, int, str]:
+        proc = subprocess.Popen(
+            command,
+            cwd=str(self._repo_path),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=True,
+        )
         started_at = time.monotonic()
         lines: list[str] = []
         if not proc.stdout:
@@ -183,3 +193,4 @@ class CodexExecutor:
 
         returncode = proc.wait(timeout=10)
         return returncode == 0, returncode, "\n".join(lines).strip()
+

@@ -201,6 +201,11 @@ class TaskRepository:
             raise KeyError(subagent_id)
         return dict(row)
 
+    def get_subagent(self, subagent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM subagents WHERE id = ?", (subagent_id,)).fetchone()
+        return dict(row) if row else None
+
     def list_subagents(self, limit: int = 100, active_only: bool = False) -> list[dict[str, Any]]:
         query = "SELECT * FROM subagents"
         params: list[Any] = []
@@ -211,3 +216,4 @@ class TaskRepository:
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
+
