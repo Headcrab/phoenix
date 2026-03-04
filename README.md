@@ -28,6 +28,10 @@ Set `.env` values:
 ```powershell
 phoenix submit --text "Add better retry logic"
 phoenix chat
+phoenix tui
+phoenix telegram
+phoenix active
+phoenix subagents --all
 phoenix list
 phoenix status --task-id <id>
 phoenix logs --task-id <id>
@@ -56,6 +60,24 @@ Endpoints:
 - Phase 3 (implemented): Telegram adapter mapped to same task service.
 
 Default API port is `8666`.
+
+`phoenix chat`:
+- Понимает естественный язык и сам выбирает действие (доработка, статус, логи, активность).
+- Self-improve запускается в фоне и не блокирует диалог.
+- Прогресс выводится кратко по этапам.
+- Служебные команды только `/help` и `/exit`.
+
+`phoenix tui`:
+- Полноэкранный интерфейс: слева задачи, справа диалог, поле ввода всегда видно.
+- Tab/Shift+Tab: переключение активного окна (задачи/детали/ввод).
+- В списке задач: Up/Down выбор, Enter открыть задачу, Space развернуть/свернуть.
+- В окне задачи: Up/Down прокрутка событий.
+- При завершении задачи итог формирует главный агент (Gemini) и показывает вам короткий вывод.
+
+`phoenix telegram`:
+- Запускает Telegram-бота на том же оркестраторе задач.
+- Пока формируется ответ, бот отправляет `typing` (`sendChatAction`).
+- Нужны переменные `.env`: `TELEGRAM_BOT_TOKEN` и `GEMINI_API_KEY`.
 
 ## 5. Windows service
 

@@ -332,6 +332,13 @@ def cmd_telegram(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_telegram(_: argparse.Namespace) -> int:
+    from app.channels.telegram.bot import TelegramBot
+
+    bot = TelegramBot()
+    return bot.run()
+
+
 def _print_chat_help() -> None:
     print("Команды:")
     print("  /help                  - показать справку")
@@ -494,6 +501,9 @@ def _build_parser() -> argparse.ArgumentParser:
     chat.set_defaults(func=cmd_chat)
 
     telegram = sub.add_parser("telegram", help="Run Telegram bot via long-polling")
+    telegram.set_defaults(func=cmd_telegram)
+
+    telegram = sub.add_parser("telegram", help="Run Telegram bot adapter")
     telegram.set_defaults(func=cmd_telegram)
 
     return parser

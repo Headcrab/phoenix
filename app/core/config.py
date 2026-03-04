@@ -36,13 +36,13 @@ def _read_int_tuple(name: str) -> tuple[int, ...]:
     value = os.getenv(name, "").strip()
     if not value:
         return ()
-    parsed: set[int] = set()
-    for item in value.split(","):
-        cleaned = item.strip()
+    result: list[int] = []
+    for part in value.split(","):
+        cleaned = part.strip()
         if not cleaned:
             continue
-        parsed.add(int(cleaned))
-    return tuple(sorted(parsed))
+        result.append(int(cleaned))
+    return tuple(result)
 
 
 @dataclass(slots=True)
@@ -68,10 +68,10 @@ class Settings:
     gemini_api_key: str
     gemini_model: str
     gemini_timeout_sec: int
-    telegram_bot_token: str
-    telegram_allowed_chat_ids: tuple[int, ...]
-    telegram_poll_timeout_sec: int
-    telegram_request_timeout_sec: int
+    telegram_bot_token: str = ""
+    telegram_timeout_sec: int = 30
+    telegram_poll_timeout_sec: int = 30
+    telegram_allowed_chat_ids: tuple[int, ...] = ()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -102,9 +102,9 @@ class Settings:
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview").strip(),
             gemini_timeout_sec=_read_int("GEMINI_TIMEOUT_SEC", 60),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
-            telegram_allowed_chat_ids=_read_int_tuple("TELEGRAM_ALLOWED_CHAT_IDS"),
+            telegram_timeout_sec=_read_int("TELEGRAM_TIMEOUT_SEC", 30),
             telegram_poll_timeout_sec=_read_int("TELEGRAM_POLL_TIMEOUT_SEC", 25),
-            telegram_request_timeout_sec=_read_int("TELEGRAM_REQUEST_TIMEOUT_SEC", 30),
+            telegram_allowed_chat_ids=_read_int_tuple("TELEGRAM_ALLOWED_CHAT_IDS"),
         )
 
     @property
