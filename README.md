@@ -19,10 +19,8 @@ Copy-Item .env.example .env
 Set `.env` values:
 - `PHOENIX_EXECUTOR_CMD` - command to run external Codex worker (self-improve only).
 - `GEMINI_API_KEY`, `GEMINI_MODEL` - interactive chat model credentials.
-- `TELEGRAM_BOT_TOKEN` - token for `phoenix telegram` adapter.
-- `TELEGRAM_ALLOWED_CHAT_IDS` - optional comma-separated allow-list (`12345,67890`).
-- `KAGI_API_KEY` - optional, enables `/search` in CLI chat and Telegram.
-- `PHOENIX_HEALTHCHECK_STRICT` - `true/false`, fail quality gate on unreachable health URL (default `false`).
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token for long-polling mode.
+- `TELEGRAM_ALLOWED_CHAT_IDS` - optional CSV list of allowed chat ids.
 - `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_TOKEN` - required for PR/auto-merge.
 
 ## 2. CLI usage
@@ -30,9 +28,6 @@ Set `.env` values:
 ```powershell
 phoenix submit --text "Add better retry logic"
 phoenix chat
-phoenix tui
-phoenix active
-phoenix subagents --all
 phoenix list
 phoenix status --task-id <id>
 phoenix logs --task-id <id>
@@ -54,26 +49,7 @@ Endpoints:
 - `POST /tasks/{task_id}/rollback`
 - `GET /health`
 
-## 4. Telegram bot
-
-```powershell
-phoenix telegram
-```
-
-Bot commands:
-- `/submit <инструкция>`
-- `/search <запрос>`
-- `/status <task_id>`
-- `/logs <task_id>`
-- `/list [limit]`
-- `/active`
-- `/subagents [limit]`
-- `/rollback <task_id>`
-
-If Gemini is configured, plain messages are routed by intent (chat/status/logs/list/self-improve).
-Without Gemini, plain text behaves like `/submit`.
-
-## 5. Phase roadmap
+## 4. Phase roadmap
 
 - Phase 1 (implemented): CLI + orchestrator pipeline.
 - Phase 2: richer Web UI over existing API.
@@ -81,20 +57,7 @@ Without Gemini, plain text behaves like `/submit`.
 
 Default API port is `8666`.
 
-`phoenix chat`:
-- Понимает естественный язык и сам выбирает действие (доработка, статус, логи, активность).
-- Self-improve запускается в фоне и не блокирует диалог.
-- Прогресс выводится кратко по этапам.
-- Служебные команды только `/help` и `/exit`.
-
-`phoenix tui`:
-- Полноэкранный интерфейс: слева задачи, справа диалог, поле ввода всегда видно.
-- Tab/Shift+Tab: переключение активного окна (задачи/детали/ввод).
-- В списке задач: Up/Down выбор, Enter открыть задачу, Space развернуть/свернуть.
-- В окне задачи: Up/Down прокрутка событий.
-- При завершении задачи итог формирует главный агент (Gemini) и показывает вам короткий вывод.
-
-## 6. Windows service
+## 5. Windows service
 
 Set `PHOENIX_SERVICE_NAME` and configure service manager (NSSM or Task Scheduler).
 `scripts/restart_service.ps1` is used for controlled restart.

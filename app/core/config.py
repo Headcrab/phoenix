@@ -32,17 +32,17 @@ def _read_int(name: str, default: int) -> int:
     return int(value)
 
 
-def _read_int_set(name: str) -> set[int] | None:
+def _read_int_tuple(name: str) -> tuple[int, ...]:
     value = os.getenv(name, "").strip()
     if not value:
-        return None
-    result: set[int] = set()
-    for chunk in value.split(","):
-        cleaned = chunk.strip()
+        return ()
+    parsed: set[int] = set()
+    for item in value.split(","):
+        cleaned = item.strip()
         if not cleaned:
             continue
-        result.add(int(cleaned))
-    return result or None
+        parsed.add(int(cleaned))
+    return tuple(sorted(parsed))
 
 
 @dataclass(slots=True)
@@ -68,14 +68,10 @@ class Settings:
     gemini_api_key: str
     gemini_model: str
     gemini_timeout_sec: int
-    kagi_api_key: str
-    kagi_api_base_url: str
-    kagi_timeout_sec: int
     telegram_bot_token: str
-    telegram_allowed_chat_ids: set[int] | None
+    telegram_allowed_chat_ids: tuple[int, ...]
     telegram_poll_timeout_sec: int
-    telegram_queue_poll_interval_sec: int
-    telegram_ci_poll_interval_sec: int
+    telegram_request_timeout_sec: int
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -83,8 +79,6 @@ class Settings:
         repo_path = Path(os.getenv("PHOENIX_REPO_PATH", ".")).resolve()
         db_path = Path(os.getenv("PHOENIX_DB_PATH", ".phoenix/phoenix.db")).resolve()
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        ci_poll_interval_sec = _read_int("PHOENIX_CI_POLL_INTERVAL_SEC", 30)
-        queue_poll_interval_sec = _read_int("PHOENIX_QUEUE_POLL_INTERVAL_SEC", 20)
         return cls(
             repo_path=repo_path,
             db_path=db_path,
@@ -95,8 +89,8 @@ class Settings:
             quality_gate_timeout_sec=_read_int("PHOENIX_QUALITY_GATE_TIMEOUT_SEC", 1200),
             auto_process_on_submit=_read_bool("PHOENIX_AUTO_PROCESS_ON_SUBMIT", True),
             auto_merge=_read_bool("PHOENIX_AUTO_MERGE", True),
-            ci_poll_interval_sec=ci_poll_interval_sec,
-            queue_poll_interval_sec=queue_poll_interval_sec,
+            ci_poll_interval_sec=_read_int("PHOENIX_CI_POLL_INTERVAL_SEC", 30),
+            queue_poll_interval_sec=_read_int("PHOENIX_QUEUE_POLL_INTERVAL_SEC", 20),
             service_name=os.getenv("PHOENIX_SERVICE_NAME", "PhoenixAgent"),
             healthcheck_url=os.getenv("PHOENIX_HEALTHCHECK_URL", "http://127.0.0.1:8666/health"),
             api_host=os.getenv("PHOENIX_API_HOST", "127.0.0.1"),
@@ -107,22 +101,16 @@ class Settings:
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview").strip(),
             gemini_timeout_sec=_read_int("GEMINI_TIMEOUT_SEC", 60),
-            kagi_api_key=os.getenv("KAGI_API_KEY", "").strip(),
-            kagi_api_base_url=os.getenv("KAGI_API_BASE_URL", "https://kagi.com/api/v0").strip(),
-            kagi_timeout_sec=_read_int("KAGI_TIMEOUT_SEC", 20),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
-            telegram_allowed_chat_ids=_read_int_set("TELEGRAM_ALLOWED_CHAT_IDS"),
-            telegram_poll_timeout_sec=_read_int("PHOENIX_TELEGRAM_POLL_TIMEOUT_SEC", 25),
-            telegram_queue_poll_interval_sec=_read_int(
-                "PHOENIX_TELEGRAM_QUEUE_POLL_INTERVAL_SEC",
-                queue_poll_interval_sec,
-            ),
-            telegram_ci_poll_interval_sec=_read_int(
-                "PHOENIX_TELEGRAM_CI_POLL_INTERVAL_SEC",
-                ci_poll_interval_sec,
-            ),
+            telegram_allowed_chat_ids=_read_int_tuple("TELEGRAM_ALLOWED_CHAT_IDS"),
+            telegram_poll_timeout_sec=_read_int("TELEGRAM_POLL_TIMEOUT_SEC", 25),
+            telegram_request_timeout_sec=_read_int("TELEGRAM_REQUEST_TIMEOUT_SEC", 30),
         )
 
     @property
     def github_enabled(self) -> bool:
         return bool(self.github_owner and self.github_repo and self.github_token)
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token)

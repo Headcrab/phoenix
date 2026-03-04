@@ -7,14 +7,8 @@ import threading
 
 import uvicorn
 
-from app.bootstrap import (
-    get_gemini_chat_service,
-    get_kagi_search_service,
-    get_orchestrator,
-    get_settings,
-)
-from app.channels.telegram.bot import run_telegram_bot
-from app.services.kagi_search import KagiSearchError, SearchHit
+from app.bootstrap import get_gemini_chat_service, get_orchestrator, get_settings
+from app.channels.telegram import TelegramApiClient, TelegramBot, TelegramPollingRunner
 
 
 def _print_json(payload: object) -> None:
@@ -28,22 +22,6 @@ def _safe_print(text: str) -> None:
         encoding = sys.stdout.encoding or "utf-8"
         safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
         print(safe_text)
-
-
-def _format_search_results(hits: list[SearchHit]) -> str:
-    if not hits:
-        return "Результаты не найдены."
-    lines = ["Результаты поиска:"]
-    for hit in hits:
-        rank = hit.rank if hit.rank is not None else "-"
-        snippet = hit.snippet.replace("\n", " ").strip()
-        if len(snippet) > 180:
-            snippet = f"{snippet[:177]}..."
-        lines.append(f"{rank}. {hit.title}")
-        lines.append(f"   {hit.url}")
-        if snippet:
-            lines.append(f"   {snippet}")
-    return "\n".join(lines)
 
 
 class ChatTaskRuntime:
@@ -60,29 +38,24 @@ class ChatTaskRuntime:
         self._orchestrator = orchestrator
         self._stop_event = threading.Event()
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self._watch_thread = threading.Thread(target=self._watch_loop, daemon=True)
+        self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
         self._tracked_tasks: set[str] = set()
-        self._last_event_id: dict[str, int] = {}
         self._last_status: dict[str, str] = {}
-        self._last_progress: dict[str, int] = {}
+        self._last_event_id: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def start(self) -> None:
         self._worker_thread.start()
-        self._watch_thread.start()
+        self._watcher_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
         self._worker_thread.join(timeout=1.0)
-        self._watch_thread.join(timeout=1.0)
+        self._watcher_thread.join(timeout=1.0)
 
     def track(self, task_id: str) -> None:
         with self._lock:
             self._tracked_tasks.add(task_id)
-
-    def list_tracked(self) -> list[str]:
-        with self._lock:
-            return sorted(self._tracked_tasks)
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -90,166 +63,38 @@ class ChatTaskRuntime:
                 self._orchestrator.process_next_queued()
                 self._orchestrator.sync_waiting_prs()
             except Exception as exc:  # noqa: BLE001
-                _safe_print(f"sys> ошибка worker: {exc}")
+                _safe_print(f"sys> worker error: {exc}")
             self._stop_event.wait(1.5)
 
-    def _watch_loop(self) -> None:
+    def _watcher_loop(self) -> None:
         while not self._stop_event.is_set():
             with self._lock:
                 tracked = list(self._tracked_tasks)
-
             for task_id in tracked:
                 task = self._orchestrator.get_task(task_id)
                 if not task:
                     continue
-
-                status = str(task.get("status", "unknown"))
-                if status != self._last_status.get(task_id):
-                    self._emit_progress(
-                        task_id,
-                        self._status_progress(status),
-                        self._status_label(status),
-                    )
+                status = task.get("status", "unknown")
+                prev_status = self._last_status.get(task_id)
+                if status != prev_status:
+                    _safe_print(f"task[{task_id}] status -> {status}")
                     self._last_status[task_id] = status
 
-                last_seen = self._last_event_id.get(task_id, 0)
+                last_seen_id = self._last_event_id.get(task_id, 0)
                 events = task.get("events") or []
-                new_events = [ev for ev in events if int(ev.get("id", 0)) > last_seen]
-                for ev in sorted(new_events, key=lambda x: int(x.get("id", 0))):
-                    ev_id = int(ev.get("id", 0))
-                    message = str(ev.get("message", ""))
-                    progress = self._milestone_progress(message)
-                    if progress is not None:
-                        self._emit_progress(task_id, progress, self._milestone_label(message))
-                    elif self._needs_user_input(message):
-                        question = message.removeprefix("codex>").strip()
-                        _safe_print(f"task[{task_id}] нужен ваш ответ: {question}")
-                    if ev_id > last_seen:
-                        last_seen = ev_id
-                self._last_event_id[task_id] = last_seen
+                new_events = [ev for ev in events if int(ev.get("id", 0)) > last_seen_id]
+                for event in sorted(new_events, key=lambda ev: int(ev.get("id", 0))):
+                    event_id = int(event.get("id", 0))
+                    message = str(event.get("message", ""))
+                    _safe_print(f"task[{task_id}] {message}")
+                    if event_id > last_seen_id:
+                        last_seen_id = event_id
+                self._last_event_id[task_id] = last_seen_id
 
                 if status in self.FINAL_STATUSES:
                     with self._lock:
                         self._tracked_tasks.discard(task_id)
-
             self._stop_event.wait(1.0)
-
-    def _emit_progress(self, task_id: str, progress: int, text: str) -> None:
-        previous = self._last_progress.get(task_id, -1)
-        if progress <= previous:
-            return
-        self._last_progress[task_id] = progress
-        _safe_print(f"task[{task_id}] {progress}% - {text}")
-
-    @staticmethod
-    def _status_progress(status: str) -> int:
-        mapping = {
-            "queued": 5,
-            "running": 15,
-            "waiting_ci": 80,
-            "completed": 100,
-            "executor_failed": 100,
-            "validation_failed": 100,
-            "git_failed": 100,
-            "restart_failed": 100,
-            "rolled_back": 100,
-        }
-        return mapping.get(status, 0)
-
-    @staticmethod
-    def _status_label(status: str) -> str:
-        mapping = {
-            "queued": "задача в очереди",
-            "running": "агент выполняет задачу",
-            "waiting_ci": "ожидание CI/merge",
-            "completed": "задача завершена успешно",
-            "executor_failed": "ошибка на этапе Codex",
-            "validation_failed": "не прошли проверки",
-            "git_failed": "ошибка git/PR этапа",
-            "restart_failed": "ошибка перезапуска",
-            "rolled_back": "выполнен откат",
-        }
-        return mapping.get(status, status)
-
-    @staticmethod
-    def _milestone_progress(message: str) -> int | None:
-        if message.startswith("Starting executor"):
-            return 20
-        if message.startswith("Executor: Executor finished successfully"):
-            return 45
-        if message.startswith("Validation report:"):
-            return 60
-        if message.startswith("Using branch"):
-            return 65
-        if message.startswith("Committed "):
-            return 72
-        if message.startswith("Pushed branch"):
-            return 76
-        if message.startswith("PR created:"):
-            return 85
-        if message == "Task completed successfully":
-            return 100
-        if "rolling back" in message.lower():
-            return 90
-        return None
-
-    @staticmethod
-    def _milestone_label(message: str) -> str:
-        if message.startswith("Starting executor"):
-            return "запускаю Codex"
-        if message.startswith("Executor: Executor finished successfully"):
-            return "Codex завершил генерацию изменений"
-        if message.startswith("Validation report:"):
-            return "проверка lint/tests/health"
-        if message.startswith("Using branch"):
-            return "подготовлена рабочая ветка"
-        if message.startswith("Committed "):
-            return "изменения закоммичены"
-        if message.startswith("Pushed branch"):
-            return "ветка отправлена в remote"
-        if message.startswith("PR created:"):
-            return "PR создан, ожидание CI"
-        if message == "Task completed successfully":
-            return "задача завершена"
-        if "rolling back" in message.lower():
-            return "выполняется откат"
-        return "выполняется задача"
-
-    @staticmethod
-    def _needs_user_input(message: str) -> bool:
-        if not message.startswith("codex>"):
-            return False
-        lowered = message.lower()
-        markers = ["?", "need input", "please provide", "уточни", "нужно уточнить", "choose"]
-        return any(marker in lowered for marker in markers)
-
-
-def _subagent_summary(
-    orchestrator,
-    limit: int = 50,
-    active_only: bool = True,
-) -> list[dict[str, object]]:
-    rows = orchestrator.list_subagents(limit=limit, active_only=active_only)
-    active_task_statuses = {"queued", "running", "waiting_ci"}
-    result: list[dict[str, object]] = []
-    for row in rows:
-        task_id = str(row.get("task_id", ""))
-        task = orchestrator.get_task(task_id) if task_id else None
-        task_status = task.get("status") if task else None
-        if active_only and task_status not in active_task_statuses:
-            continue
-        result.append(
-            {
-                "subagent_id": row.get("id"),
-                "kind": row.get("kind"),
-                "status": row.get("status"),
-                "activity": row.get("activity"),
-                "task_id": task_id,
-                "task_status": task_status,
-                "updated_at": row.get("updated_at"),
-            }
-        )
-    return result
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
@@ -306,135 +151,57 @@ def cmd_worker_once(_: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_active(args: argparse.Namespace) -> int:
-    orchestrator = get_orchestrator()
-    summary = _subagent_summary(orchestrator=orchestrator, limit=args.limit, active_only=True)
-    _print_json(summary)
-    return 0
-
-
-def cmd_subagents(args: argparse.Namespace) -> int:
-    orchestrator = get_orchestrator()
-    summary = _subagent_summary(
-        orchestrator=orchestrator,
-        limit=args.limit,
-        active_only=not args.all,
-    )
-    _print_json(summary)
-    return 0
-
-
 def cmd_serve(args: argparse.Namespace) -> int:
     uvicorn.run("app.main:app", host=args.host, port=args.port, reload=False)
     return 0
 
 
-def cmd_telegram(args: argparse.Namespace) -> int:
+def cmd_telegram(_: argparse.Namespace) -> int:
     settings = get_settings()
-    token = str(args.token or "").strip()
-    if not token:
+    if not settings.telegram_enabled:
         print("Telegram не настроен. Укажи TELEGRAM_BOT_TOKEN в .env.", file=sys.stderr)
         return 1
     allowed_chat_ids = (
-        set(args.allowed_chat_id)
-        if args.allowed_chat_id
-        else settings.telegram_allowed_chat_ids
+        set(settings.telegram_allowed_chat_ids) if settings.telegram_allowed_chat_ids else None
     )
-    orchestrator = get_orchestrator()
-    try:
-        run_telegram_bot(
-            orchestrator=orchestrator,
-            token=token,
-            queue_poll_interval_sec=args.queue_poll_interval_sec,
-            ci_poll_interval_sec=args.ci_poll_interval_sec,
-            poll_timeout_sec=args.poll_timeout_sec,
-            allowed_chat_ids=allowed_chat_ids,
-            gemini_chat_service=get_gemini_chat_service(),
-            kagi_search_service=get_kagi_search_service(),
-        )
-        return 0
-    except KeyboardInterrupt:
-        return 0
-
-
-def cmd_tui(_: argparse.Namespace) -> int:
-    from app.channels.cli.tui import run_tui
-
-    try:
-        return run_tui()
-    except Exception as exc:  # noqa: BLE001
-        print(
-            "TUI не удалось запустить. Нужна интерактивная локальная консоль (cmd/pwsh).",
-            file=sys.stderr,
-        )
-        print(f"Детали: {exc}", file=sys.stderr)
-        return 1
-
-
-def cmd_search(args: argparse.Namespace) -> int:
-    search = get_kagi_search_service()
-    if not search.configured:
-        print("Kagi не настроен. Укажи KAGI_API_KEY в .env.", file=sys.stderr)
-        return 1
-    try:
-        hits = search.search(query=args.query, limit=args.limit)
-    except KagiSearchError as exc:
-        print(f"Kagi search error: {exc}", file=sys.stderr)
-        return 1
-    payload = {
-        "query": args.query,
-        "results": [
-            {
-                "rank": hit.rank,
-                "title": hit.title,
-                "url": hit.url,
-                "snippet": hit.snippet,
-            }
-            for hit in hits
-        ],
-    }
-    if search.last_notice:
-        payload["notice"] = search.last_notice
-    _print_json(payload)
+    bot = TelegramBot(
+        api_client=TelegramApiClient(
+            token=settings.telegram_bot_token,
+            request_timeout_sec=settings.telegram_request_timeout_sec,
+        ),
+        orchestrator=get_orchestrator(),
+        gemini=get_gemini_chat_service(),
+        allowed_chat_ids=allowed_chat_ids,
+    )
+    runner = TelegramPollingRunner(
+        api_client=bot.api_client,
+        bot=bot,
+        poll_timeout_sec=settings.telegram_poll_timeout_sec,
+    )
+    print("Phoenix Telegram bot запущен (long-polling). Ctrl+C для остановки.")
+    runner.run_forever()
     return 0
 
 
 def _print_chat_help() -> None:
-    print("Чат работает на естественном языке.")
-    print("Служебные команды:")
-    print("  /help  - показать это сообщение")
-    print("  /search <запрос> - поиск в вебе через Kagi")
-    print("  /exit  - выйти из чата")
-
-
-def _pick_task_id(
-    explicit_task_id: str | None,
-    active_summary: list[dict[str, object]],
-    tracked_task_ids: list[str],
-) -> str | None:
-    if explicit_task_id:
-        return explicit_task_id
-    for item in active_summary:
-        task_id = item.get("task_id")
-        if task_id:
-            return str(task_id)
-    if tracked_task_ids:
-        return tracked_task_ids[-1]
-    return None
+    print("Команды:")
+    print("  /help                  - показать справку")
+    print("  /exit                  - выйти из чата")
+    print("  /improve <текст>       - отправить self-improve задачу (через Codex, в фоне)")
+    print("  /status <task_id>      - статус задачи")
+    print("  /list                  - последние задачи")
 
 
 def cmd_chat(_: argparse.Namespace) -> int:
     orchestrator = get_orchestrator()
     gemini = get_gemini_chat_service()
-    search = get_kagi_search_service()
     if not gemini.configured:
         print("Gemini не настроен. Укажи GEMINI_API_KEY и GEMINI_MODEL в .env.", file=sys.stderr)
         return 1
     history: list[dict[str, str]] = []
-    runtime = ChatTaskRuntime(orchestrator)
+    runtime = ChatTaskRuntime(orchestrator=orchestrator)
     runtime.start()
-    print("Phoenix Chat (Gemini). Пиши свободно, агент сам решит действие.")
-    print("Служебные: /help, /exit")
+    print("Phoenix Chat (Gemini). /help для справки, /exit для выхода.")
     try:
         while True:
             try:
@@ -452,45 +219,11 @@ def cmd_chat(_: argparse.Namespace) -> int:
             if user_input == "/help":
                 _print_chat_help()
                 continue
-            if user_input.startswith("/search"):
-                query = user_input.removeprefix("/search").strip()
-                if not query:
-                    _safe_print("ai> Использование: /search <запрос>")
+            if user_input.startswith("/improve "):
+                instruction = user_input[len("/improve ") :].strip()
+                if not instruction:
+                    print("Укажи текст задачи после /improve")
                     continue
-                if not search.configured:
-                    _safe_print("ai> Kagi не настроен. Укажи KAGI_API_KEY в .env.")
-                    continue
-                try:
-                    hits = search.search(query=query, limit=5)
-                except KagiSearchError as exc:
-                    _safe_print(f"ai> Ошибка Kagi поиска: {exc}")
-                    continue
-                if search.last_notice:
-                    _safe_print(f"note> {search.last_notice}")
-                _safe_print(f"ai> {_format_search_results(hits)}")
-                continue
-
-            active_summary = _subagent_summary(
-                orchestrator=orchestrator,
-                limit=50,
-                active_only=True,
-            )
-            tracked_task_ids = runtime.list_tracked()
-            try:
-                decision = gemini.route_intent(
-                    user_text=user_input,
-                    active_subagents=active_summary,
-                    tracked_task_ids=tracked_task_ids,
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"Gemini error: {exc}", file=sys.stderr)
-                continue
-            if gemini.last_notice:
-                _safe_print(f"note> {gemini.last_notice}")
-                gemini.last_notice = ""
-
-            if decision.action == "self_improve":
-                instruction = (decision.instruction or user_input).strip()
                 result = orchestrator.submit_task(
                     instruction=instruction,
                     priority="normal",
@@ -498,54 +231,29 @@ def cmd_chat(_: argparse.Namespace) -> int:
                 )
                 runtime.track(result.task_id)
                 _safe_print(
-                    "ai> Принял. Поставил задачу в очередь: "
-                    f"task_id={result.task_id}, статус={result.status}."
+                    f"self-improve поставлен в очередь: task_id={result.task_id}, "
+                    f"status={result.status}"
                 )
                 continue
-
-            if decision.action == "show_active":
-                if active_summary:
-                    _print_json(active_summary)
-                else:
-                    _safe_print("ai> Сейчас агент свободен, активных задач нет.")
-                continue
-
-            if decision.action == "show_subagents":
-                _print_json(
-                    _subagent_summary(
-                        orchestrator=orchestrator,
-                        limit=100,
-                        active_only=False,
-                    )
-                )
-                continue
-
-            if decision.action in {"show_status", "show_logs"}:
-                task_id = _pick_task_id(decision.task_id, active_summary, tracked_task_ids)
-                if not task_id:
-                    _safe_print("ai> Не вижу активной задачи. Уточни `task_id`.")
-                    continue
+            if user_input.startswith("/status "):
+                task_id = user_input[len("/status ") :].strip()
                 task = orchestrator.get_task(task_id)
                 if not task:
-                    _safe_print(f"ai> Задача `{task_id}` не найдена.")
-                    continue
-                if decision.action == "show_status":
-                    _print_json(task)
+                    print("Task not found")
                 else:
-                    _print_json(task.get("events", []))
+                    _print_json(task)
                 continue
-
-            if decision.action == "list_tasks":
+            if user_input == "/list":
                 _print_json(orchestrator.list_tasks(limit=20))
                 continue
-
-            answer = decision.reply
-            if not answer:
-                try:
-                    answer = gemini.chat(history=history, user_text=user_input)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Gemini error: {exc}", file=sys.stderr)
-                    continue
+            try:
+                answer = gemini.chat(history=history, user_text=user_input)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Gemini error: {exc}", file=sys.stderr)
+                continue
+            if gemini.last_notice:
+                _safe_print(f"note> {gemini.last_notice}")
+                gemini.last_notice = ""
             _safe_print(f"ai> {answer}")
             history.append({"role": "user", "text": user_input})
             history.append({"role": "assistant", "text": answer})
@@ -584,15 +292,6 @@ def _build_parser() -> argparse.ArgumentParser:
     worker = sub.add_parser("worker-once", help="Run one worker iteration")
     worker.set_defaults(func=cmd_worker_once)
 
-    active = sub.add_parser("active", help="Show currently active subagents")
-    active.add_argument("--limit", type=int, default=50)
-    active.set_defaults(func=cmd_active)
-
-    subagents = sub.add_parser("subagents", help="Show subagent registry")
-    subagents.add_argument("--limit", type=int, default=100)
-    subagents.add_argument("--all", action="store_true")
-    subagents.set_defaults(func=cmd_subagents)
-
     serve = sub.add_parser("serve", help="Run API server")
     settings = get_settings()
     serve.add_argument("--host", default=settings.api_host)
@@ -602,39 +301,8 @@ def _build_parser() -> argparse.ArgumentParser:
     chat = sub.add_parser("chat", help="Interactive chat via Gemini")
     chat.set_defaults(func=cmd_chat)
 
-    search = sub.add_parser("search", help="Web search via Kagi API")
-    search.add_argument("--query", required=True)
-    search.add_argument("--limit", type=int, default=5)
-    search.set_defaults(func=cmd_search)
-
-    telegram = sub.add_parser("telegram", help="Run Telegram bot adapter")
-    telegram.add_argument("--token", default=settings.telegram_bot_token)
-    telegram.add_argument(
-        "--poll-timeout-sec",
-        type=int,
-        default=settings.telegram_poll_timeout_sec,
-    )
-    telegram.add_argument(
-        "--queue-poll-interval-sec",
-        type=int,
-        default=settings.telegram_queue_poll_interval_sec,
-    )
-    telegram.add_argument(
-        "--ci-poll-interval-sec",
-        type=int,
-        default=settings.telegram_ci_poll_interval_sec,
-    )
-    telegram.add_argument(
-        "--allowed-chat-id",
-        action="append",
-        type=int,
-        default=None,
-        help="Repeat option to allow multiple chat ids",
-    )
+    telegram = sub.add_parser("telegram", help="Run Telegram bot via long-polling")
     telegram.set_defaults(func=cmd_telegram)
-
-    tui = sub.add_parser("tui", help="Full-screen TUI with always-visible chat and task board")
-    tui.set_defaults(func=cmd_tui)
 
     return parser
 

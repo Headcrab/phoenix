@@ -1,178 +1,144 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import dataclass
+from typing import Any
 
-from app.channels.telegram.bot import BotRuntimeConfig, TelegramBot
+from app.channels.telegram.bot import TelegramBot
+from app.services.orchestrator import SubmitResult
 
 
-class FakeApi:
-    def send_message(self, chat_id: int, text: str) -> None:  # noqa: ARG002
-        return None
+class FakeApiClient:
+    def __init__(self) -> None:
+        self.messages: list[tuple[int, str]] = []
+
+    def get_updates(self, offset: int | None, timeout_sec: int) -> list[dict[str, Any]]:
+        return []
+
+    def send_message(self, chat_id: int, text: str) -> None:
+        self.messages.append((chat_id, text))
 
 
 class FakeOrchestrator:
     def __init__(self) -> None:
-        self._tasks: dict[str, dict[str, object]] = {
+        self.submitted: list[str] = []
+        self.tasks: dict[str, dict[str, Any]] = {
             "task-1": {
                 "id": "task-1",
-                "status": "running",
-                "instruction": "Initial task",
-                "events": [{"id": 1, "created_at": "2026-03-03T00:00:00Z", "message": "Started"}],
+                "status": "queued",
+                "priority": "normal",
+                "branch_name": None,
+                "pr_url": None,
+                "last_error": None,
+                "updated_at": "2026-03-03T00:00:00+00:00",
+                "events": [
+                    {
+                        "created_at": "2026-03-03T00:00:01+00:00",
+                        "message": "Task created",
+                    }
+                ],
             }
         }
-        self.submitted: list[str] = []
 
     def submit_task(
         self,
         instruction: str,
-        priority: str,  # noqa: ARG002
-        idempotency_key: str | None,  # noqa: ARG002
-        process_now: bool,  # noqa: ARG002
-    ) -> SimpleNamespace:
+        priority: str = "normal",
+        idempotency_key: str | None = None,
+        process_now: bool | None = None,
+    ) -> SubmitResult:
         self.submitted.append(instruction)
-        task_id = f"task-{len(self._tasks) + 1}"
-        self._tasks[task_id] = {
+        task_id = "task-2"
+        self.tasks[task_id] = {
             "id": task_id,
-            "status": "queued",
-            "instruction": instruction,
+            "status": "running",
+            "priority": priority,
+            "branch_name": None,
+            "pr_url": None,
+            "last_error": None,
+            "updated_at": "2026-03-03T00:00:02+00:00",
             "events": [],
         }
-        return SimpleNamespace(task_id=task_id, status="queued")
+        return SubmitResult(task_id=task_id, status="running")
 
-    def get_task(self, task_id: str) -> dict[str, object] | None:
-        return self._tasks.get(task_id)
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        return self.tasks.get(task_id)
 
-    def list_tasks(self, limit: int = 50, status: str | None = None) -> list[dict[str, object]]:
-        items = list(self._tasks.values())
+    def list_tasks(self, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        tasks = list(self.tasks.values())
         if status:
-            items = [task for task in items if task.get("status") == status]
-        return items[:limit]
+            tasks = [task for task in tasks if task.get("status") == status]
+        return tasks[:limit]
 
-    def list_subagents(
-        self,
-        limit: int = 100,
-        active_only: bool = False,
-    ) -> list[dict[str, object]]:
-        rows = [
-            {
-                "id": "codex:task-1",
-                "kind": "codex",
-                "status": "running",
-                "activity": "Doing work",
-                "task_id": "task-1",
-                "updated_at": "2026-03-03T00:00:00Z",
-            }
-        ]
-        if active_only:
-            return rows[:limit]
-        return rows[:limit]
-
-    def rollback_task(self, task_id: str) -> dict[str, object]:
-        task = self._tasks[task_id]
+    def rollback_task(self, task_id: str) -> dict[str, Any]:
+        task = self.tasks[task_id]
         task["status"] = "rolled_back"
         return task
 
-    def process_next_queued(self) -> None:
-        return None
 
-    def sync_waiting_prs(self) -> None:
-        return None
-
-
-class FakeKagi:
-    configured = True
-
-    def __init__(self) -> None:
-        self.last_notice = ""
-        self.last_query = ""
-
-    def search(self, query: str, limit: int = 5):  # noqa: ANN001, ARG002
-        self.last_query = query
-        return [
-            SimpleNamespace(
-                rank=1,
-                title="Phoenix",
-                url="https://example.com/phoenix",
-                snippet="Phoenix search result",
-            )
-        ]
-
-
+@dataclass
 class FakeGemini:
-    configured = True
+    configured: bool = True
+    last_notice: str = ""
 
-    def __init__(self, decision: SimpleNamespace, chat_answer: str = "") -> None:
-        self._decision = decision
-        self._chat_answer = chat_answer
-        self.last_notice = ""
-
-    def route_intent(
-        self,
-        user_text: str,  # noqa: ARG002
-        active_subagents: list[dict[str, object]],  # noqa: ARG002
-        tracked_task_ids: list[str],  # noqa: ARG002
-    ) -> SimpleNamespace:
-        return self._decision
-
-    def chat(self, history: list[dict[str, str]], user_text: str) -> str:  # noqa: ARG002
-        return self._chat_answer
+    def chat(self, history: list[dict[str, str]], user_text: str) -> str:
+        return f"AI: {user_text}"
 
 
-def _build_bot(
-    orchestrator: FakeOrchestrator,
-    gemini: FakeGemini | None = None,
-    kagi: FakeKagi | None = None,
-) -> TelegramBot:
-    return TelegramBot(
+def _update(text: str, chat_id: int = 1) -> dict[str, Any]:
+    return {
+        "update_id": 100,
+        "message": {
+            "chat": {"id": chat_id},
+            "text": text,
+        },
+    }
+
+
+def test_telegram_improve_command_submits_task() -> None:
+    api = FakeApiClient()
+    orchestrator = FakeOrchestrator()
+    bot = TelegramBot(api_client=api, orchestrator=orchestrator, gemini=FakeGemini())
+
+    bot.handle_update(_update("/improve improve validation"))
+
+    assert orchestrator.submitted == ["improve validation"]
+    assert api.messages
+    assert "Задача поставлена: task-2" in api.messages[-1][1]
+
+
+def test_telegram_uses_gemini_for_plain_text() -> None:
+    api = FakeApiClient()
+    orchestrator = FakeOrchestrator()
+    bot = TelegramBot(api_client=api, orchestrator=orchestrator, gemini=FakeGemini())
+
+    bot.handle_update(_update("Какой статус у системы?"))
+
+    assert api.messages
+    assert api.messages[-1][1] == "AI: Какой статус у системы?"
+
+
+def test_telegram_blocks_disallowed_chat() -> None:
+    api = FakeApiClient()
+    orchestrator = FakeOrchestrator()
+    bot = TelegramBot(
+        api_client=api,
         orchestrator=orchestrator,
-        api=FakeApi(),
-        config=BotRuntimeConfig(),
-        gemini_chat=gemini,
-        kagi_search=kagi,
+        gemini=FakeGemini(),
+        allowed_chat_ids={42},
     )
 
+    bot.handle_update(_update("/help", chat_id=7))
 
-def test_search_command_uses_kagi_service() -> None:
+    assert api.messages
+    assert "Доступ запрещен" in api.messages[-1][1]
+
+
+def test_telegram_status_not_found() -> None:
+    api = FakeApiClient()
     orchestrator = FakeOrchestrator()
-    kagi = FakeKagi()
-    bot = _build_bot(orchestrator=orchestrator, kagi=kagi)
+    bot = TelegramBot(api_client=api, orchestrator=orchestrator, gemini=FakeGemini())
 
-    reply = bot._handle_text(chat_id=1, text="/search phoenix agent")
+    bot.handle_update(_update("/status missing"))
 
-    assert "Результаты поиска:" in reply
-    assert "https://example.com/phoenix" in reply
-    assert kagi.last_query == "phoenix agent"
-
-
-def test_natural_language_status_uses_gemini_router() -> None:
-    orchestrator = FakeOrchestrator()
-    decision = SimpleNamespace(action="show_status", instruction=None, task_id=None, reply=None)
-    bot = _build_bot(orchestrator=orchestrator, gemini=FakeGemini(decision=decision))
-    bot._last_task_by_chat[1] = "task-1"
-
-    reply = bot._handle_text(chat_id=1, text="какой статус?")
-
-    assert "task_id: task-1" in reply
-    assert "status: running" in reply
-
-
-def test_natural_language_chat_falls_back_to_gemini_chat() -> None:
-    orchestrator = FakeOrchestrator()
-    decision = SimpleNamespace(action="chat", instruction=None, task_id=None, reply=None)
-    gemini = FakeGemini(decision=decision, chat_answer="Сделал анализ.")
-    bot = _build_bot(orchestrator=orchestrator, gemini=gemini)
-
-    reply = bot._handle_text(chat_id=7, text="что ты умеешь?")
-
-    assert reply == "Сделал анализ."
-    assert len(bot._chat_history_by_chat[7]) == 2
-
-
-def test_plain_text_without_gemini_submits_task() -> None:
-    orchestrator = FakeOrchestrator()
-    bot = _build_bot(orchestrator=orchestrator)
-
-    reply = bot._handle_text(chat_id=3, text="Добавь новый флоу")
-
-    assert "Задача поставлена в очередь." in reply
-    assert orchestrator.submitted == ["Добавь новый флоу"]
+    assert api.messages
+    assert api.messages[-1][1] == "Задача не найдена."

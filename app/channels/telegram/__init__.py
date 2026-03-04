@@ -1,6 +1,5 @@
 """Telegram channel adapter."""
 
-from app.channels.telegram.bot import run_telegram_bot
+from app.channels.telegram.bot import TelegramApiClient, TelegramBot, TelegramPollingRunner
 
-__all__ = ["run_telegram_bot"]
-
+__all__ = ["TelegramApiClient", "TelegramBot", "TelegramPollingRunner"]
