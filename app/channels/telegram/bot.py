@@ -64,7 +64,7 @@ class TelegramBot:
         self._orchestrator = get_orchestrator()
         self._gemini = get_gemini_chat_service()
         self._token = self._settings.telegram_bot_token
-        self._timeout_sec = self._settings.telegram_timeout_sec
+        self._timeout_sec = self._settings.telegram_request_timeout_sec
         self._poll_timeout_sec = self._settings.telegram_poll_timeout_sec
         self._allowed_chat_ids = set(self._settings.telegram_allowed_chat_ids)
         self._session = requests.Session()

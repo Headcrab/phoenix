@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -139,20 +140,6 @@ class CodexExecutor:
             stderr=subprocess.STDOUT,
             text=True,
             shell=False,
-        )
-
-    def _run_streaming_command(
-        self,
-        command: str,
-        on_output: Callable[[str], None] | None = None,
-    ) -> tuple[bool, int, str]:
-        proc = subprocess.Popen(
-            command,
-            cwd=str(self._repo_path),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            shell=True,
         )
         started_at = time.monotonic()
         lines: list[str] = []

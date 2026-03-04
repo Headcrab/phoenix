@@ -1,4 +1,5 @@
 """Telegram channel adapter."""
 
+from app.channels.telegram.bot import TelegramBot
 
-__all__ = ["TelegramApiClient", "TelegramBot", "TelegramPollingRunner"]
+__all__ = ["TelegramBot"]
